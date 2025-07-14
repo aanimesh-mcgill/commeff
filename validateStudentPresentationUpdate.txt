@@ -1,0 +1,3 @@
+function validateStudentPresentationUpdate(newData, oldData) {
+  return newData.slides.size() == oldData.slides.size()
+    && ( 

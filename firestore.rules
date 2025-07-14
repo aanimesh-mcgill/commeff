@@ -1,0 +1,97 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // User profiles: users can read/write their own profile
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Courses: allow any authenticated user to read course metadata, and instructors to read their own courses
+    match /courses/{courseId} {
+      // Allow any authenticated user to read course metadata (name, semester, etc.)
+      allow read: if request.auth != null;
+      
+      // Allow instructors to create a course (cannot check instructorId yet)
+      allow create: if request.auth != null &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'instructor';
+
+      // Only the instructor who owns the course can update/delete
+      allow update, delete: if request.auth != null &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'instructor' &&
+        resource.data.instructorId == request.auth.uid;
+
+      // Enrollment codes subcollection: only instructor can read/write
+      match /codes/{codeId} {
+        // Instructor can read/write any code
+        allow read, write: if isInstructor(courseId);
+
+        // Students can read codes to check validity
+        allow read: if request.auth != null;
+
+        // Students can update a code to mark it as used by themselves
+        allow update: if request.auth != null
+          && request.resource.data.used == true
+          && request.resource.data.usedBy == request.auth.uid;
+      }
+    }
+
+    // Helper functions
+    function isInstructor(courseId) {
+      return request.auth != null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'instructor'
+        && get(/databases/$(database)/documents/courses/$(courseId)).data.instructorId == request.auth.uid;
+    }
+
+    function isEnrolledStudent(courseId) {
+      return request.auth != null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'student'
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.enrolledCourses.hasAny([courseId]);
+    }
+
+    // Presentations: instructor-owned with student response subcollections
+    match /courses/{courseId}/presentations/{presentationId} {
+      // TEMP DEBUG: allow any authenticated user to read
+      allow read: if request.auth != null;
+      
+      // Only instructor can create/delete presentations
+      allow create, delete: if isInstructor(courseId);
+
+      // Allow instructor to update any field, but students can only update likes/comments fields
+      allow update: if isInstructor(courseId) || (
+        isEnrolledStudent(courseId) &&
+        // Only allow students to update likes/comments fields, not metadata
+        request.resource.data.keys().hasOnly(['likes', 'comments'])
+      );
+
+      // Slides subcollection: only instructor can read/write
+      match /slides/{slideId} {
+        allow read, write: if isInstructor(courseId);
+        // Comments subcollection: instructor or enrolled student can read/write
+        match /comments/{commentId} {
+          allow read, write: if isInstructor(courseId) || isEnrolledStudent(courseId);
+        }
+      }
+
+      // Student response subcollection: each student can only access their own response document
+      match /responses/{userId} {
+        // Allow all enrolled students and instructors to read all responses
+        allow read: if isEnrolledStudent(courseId) || isInstructor(courseId);
+        // Only the owner can write their own response
+        allow write: if request.auth != null && request.auth.uid == userId;
+        // Comments subcollection: allow all enrolled students and instructors to read, only owner can write
+        match /comments/{commentId} {
+          allow read: if isEnrolledStudent(courseId) || isInstructor(courseId);
+          allow write: if request.auth != null && request.auth.uid == userId;
+        }
+      }
+    }
+
+    // Allow collectionGroup read on any comments subcollection for enrolled students and instructors
+    match /{path=**}/comments/{commentId} {
+      allow read: if request.auth != null && (
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.enrolledCourses.hasAny([resource.data.courseId]) ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'instructor'
+      );
+    }
+  }
+}

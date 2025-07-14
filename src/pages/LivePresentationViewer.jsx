@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { onSnapshot, doc, collection, getDocs, query, orderBy, addDoc, serverTimestamp, updateDoc, getDoc, where, collectionGroup } from 'firebase/firestore';
 import { MessageSquare, ThumbsUp } from 'lucide-react';
 import { db } from '../firebase/config';
+import PresentationFullScreen from './PresentationFullScreen';
 
 function getRandomCode() {
   return Math.floor(10000 + Math.random() * 90000).toString();
@@ -432,13 +433,16 @@ const LivePresentationViewer = () => {
       }
     }
     if (!likeUserId) return;
-    if (comment.likedBy && comment.likedBy[likeUserId]) return;
-    // Find the comment doc ref using collectionGroup is not possible for update, so use the known path
-    // Comments are stored under responses/{userId}/comments/{commentId}
-    // We need to find the correct userId (the comment's userId field)
-    const commentRef = doc(db, 'courses', courseId, 'presentations', presentationId, 'responses', comment.userId, 'comments', comment.id);
     const newLikedBy = { ...(comment.likedBy || {}) };
-    newLikedBy[likeUserId] = true;
+    if (newLikedBy[likeUserId]) {
+      // If already liked, remove the like (toggle off)
+      delete newLikedBy[likeUserId];
+    } else {
+      // If not liked, add the like (toggle on)
+      newLikedBy[likeUserId] = true;
+    }
+    // Update only the likedBy field
+    const commentRef = doc(db, 'courses', courseId, 'presentations', presentationId, 'responses', comment.userId, 'comments', comment.id);
     await updateDoc(commentRef, { likedBy: newLikedBy });
   };
 
@@ -540,59 +544,49 @@ const LivePresentationViewer = () => {
 
   console.log('[LiveViewer] Rendering main viewer UI. presentation:', presentation, 'audienceMode:', audienceMode, 'userId:', userId);
 
+  // In the main return, render the slide using the same layout as PresentationFullScreen, but without navigation/close overlays
   return (
-    <div className="relative w-screen h-screen bg-black overflow-hidden">
+    <div className="fixed inset-0 z-40 bg-black flex flex-col items-center justify-center" style={{ minHeight: '100vh', minWidth: '100vw' }}>
       {/* Username at top-right */}
       <div className="absolute top-4 right-8 z-20 text-white text-sm bg-black/60 px-3 py-1 rounded-full shadow">
         {userId}
       </div>
-      {/* Discussion Icon */}
+      {/* Discussion Icon (ensure clickable) */}
       <button
         className="absolute top-4 right-24 z-30 bg-white bg-opacity-80 rounded-full p-2 shadow hover:bg-primary-100"
         title="Open discussion"
         onClick={() => setShowDiscussion(true)}
+        tabIndex={0}
+        aria-label="Open discussion"
       >
         <MessageSquare className="w-6 h-6 text-primary-600" />
       </button>
-      {/* Slide content/image centered and scaled */}
-      <div className="absolute inset-0 flex items-center justify-center bg-black">
-        {slides.length === 0 ? (
-          <div className="text-gray-400 text-2xl">No slides found.</div>
-        ) : slideToShow ? (
-          slideToShow.imageUrl ? (
-            <img
-              src={slideToShow.imageUrl}
-              alt="Slide"
-              className="object-contain w-full h-full"
-              style={{ background: 'white' }}
-            />
+      {/* Slide content (use exact logic from PresentationFullScreen) */}
+      <div className="flex flex-col items-center justify-center w-full h-full">
+        <div className="flex items-center justify-center" style={{ width: '96vw', height: '96vh', maxWidth: '100vw', maxHeight: '100vh', padding: 0, margin: 0 }}>
+          {slideToShow && slideToShow.content && slideToShow.content.imageUrl ? (
+            <img src={slideToShow.content.imageUrl} alt={slideToShow.title || 'Slide'} style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#222' }} />
+          ) : slideToShow && slideToShow.imageUrl ? (
+            <img src={slideToShow.imageUrl} alt={slideToShow.title || 'Slide'} style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#222' }} />
           ) : (
-            <div className="flex items-center justify-center w-full h-full">
-              <div className="text-white text-3xl font-semibold text-center px-8 py-4 bg-black/60 rounded-lg shadow">
-                {Array.isArray(slideToShow.content)
-                  ? slideToShow.content.map((item, idx) => {
-                      if (typeof item === 'string') return <div key={idx}>{item}</div>;
-                      if (item && typeof item === 'object') {
-                        if (item.text) return <div key={idx}>{item.text}</div>;
-                        if (item.imageUrl) return <img key={idx} src={item.imageUrl} alt="" style={{ maxWidth: '100%', maxHeight: 400 }} />;
-                      }
-                      return null;
-                    })
-                  : (slideToShow.content && typeof slideToShow.content === 'object')
-                    ? (slideToShow.content.text
-                        ? <div>{slideToShow.content.text}</div>
-                        : slideToShow.content.imageUrl
-                          ? <img src={slideToShow.content.imageUrl} alt="" style={{ maxWidth: '100%', maxHeight: 400 }} />
-                          : null)
-                    : slideToShow.content || slideToShow.text || ''}
+            <div className="bg-white w-full h-full flex flex-col items-center justify-center">
+              <h2 className="text-4xl font-bold mb-4">{slideToShow?.title || 'Untitled Slide'}</h2>
+              <div className="text-lg text-gray-700">
+                {typeof slideToShow?.content === 'string'
+                  ? slideToShow.content
+                  : slideToShow?.content && typeof slideToShow.content === 'object' && typeof slideToShow.content.text === 'string'
+                    ? slideToShow.content.text
+                    : ''}
               </div>
             </div>
-          )
-        ) : (
-          <div className="text-gray-400 text-2xl">Slide will appear here</div>
-        )}
+          )}
+        </div>
+        {/* Slide number overlay */}
+        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-black bg-opacity-60 text-white px-4 py-2 rounded text-lg font-semibold">
+          Slide {presentation.currentSlideIndex + 1} / {slides.length}
+        </div>
       </div>
-      {/* Discussion Overlay */}
+      {/* Discussion Overlay (unchanged, but ensure it opens/closes) */}
       {showDiscussion && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black bg-opacity-60">
           <div className="absolute inset-0" onClick={() => setShowDiscussion(false)} />
@@ -625,11 +619,10 @@ const LivePresentationViewer = () => {
                       >
                         {/* Like icon and count */}
                         <button
-                          className={`flex items-center mr-3 text-gray-500 hover:text-primary-600 focus:outline-none ${alreadyLiked ? 'opacity-50 cursor-not-allowed' : ''}`}
+                          className={`flex items-center mr-3 text-gray-500 hover:text-primary-600 focus:outline-none`}
                           onClick={() => handleLike(c)}
                           tabIndex={0}
                           aria-label="Like comment"
-                          disabled={alreadyLiked}
                         >
                           <ThumbsUp className="w-5 h-5 mr-1" />
                           <span className="text-sm font-semibold">{likeCount}</span>
@@ -659,12 +652,6 @@ const LivePresentationViewer = () => {
               </form>
             </div>
           </div>
-        </div>
-      )}
-      {/* Slide number at bottom-right */}
-      {slides.length > 0 && presentation && typeof presentation.currentSlideIndex === 'number' && (
-        <div className="absolute bottom-6 right-8 z-20 text-white text-lg bg-black/60 px-4 py-2 rounded-full shadow">
-          {presentation.currentSlideIndex + 1} / {slides.length}
         </div>
       )}
     </div>

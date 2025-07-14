@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { doc, getDoc, updateDoc, setDoc, collection, getDocs, query, orderBy, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, setDoc, collection, getDocs, query, orderBy, onSnapshot, addDoc, serverTimestamp, collectionGroup, where } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { PresentationToolbar } from './PresentationToolbar';
 import { SlidesSidebar } from './SlidesSidebar';
@@ -348,13 +348,18 @@ export default function PresentationEditorV3({ courseId, presentationId = 'demo-
     if (!presentationId || !courseId || !currentUser) return;
     const updateCurrentSlideIndex = async () => {
       try {
+        const idx = presentation.currentSlideIndex;
+        if (typeof idx !== 'number' || idx < 0 || idx >= (presentation.slides?.length || 0)) {
+          console.warn('[updateCurrentSlideIndex] Not updating: invalid currentSlideIndex', idx);
+          return;
+        }
         // DEBUG: Log user and instructor info
         const courseDocRef = doc(db, 'courses', courseId);
         const courseSnap = await getDoc(courseDocRef);
         const instructorId = courseSnap.exists() ? courseSnap.data().instructorId : null;
         console.log('[updateCurrentSlideIndex][DEBUG] currentUser.uid:', currentUser.uid, 'instructorId:', instructorId, 'courseId:', courseId, 'presentationId:', presentationId);
         const docRef = doc(db, 'courses', courseId, 'presentations', presentationId);
-        await updateDoc(docRef, { currentSlideIndex: presentation.currentSlideIndex });
+        await updateDoc(docRef, { currentSlideIndex: idx });
       } catch (err) {
         if (err.code === 'permission-denied' || (err.message && err.message.includes('permission'))) {
           console.error('[Firestore][PermissionError] Failed to update currentSlideIndex:', {
@@ -371,27 +376,22 @@ export default function PresentationEditorV3({ courseId, presentationId = 'demo-
 
   // Real-time Firestore sync for comments (current slide)
   useEffect(() => {
-    if (!editorState.isPresenting || !presentationId || !courseId || !Array.isArray(presentation.slides) || !presentation.slides.length) return;
-    const currentSlide = presentation.slides[presentation.currentSlideIndex];
-    if (!currentSlide) return;
-    const commentsCol = collection(db, 'courses', courseId, 'presentations', presentationId, 'slides', currentSlide.id, 'comments');
-    const q = query(commentsCol, orderBy('timePosted', 'asc'));
-    const unsub = onSnapshot(q, (snap) => {
-      const arr = [];
-      snap.forEach(doc => arr.push({ id: doc.id, ...doc.data() }));
-      setComments(arr);
-    }, (error) => {
-      if (error.code === 'permission-denied' || (error.message && error.message.includes('permission'))) {
-        console.error('[Firestore][PermissionError] Snapshot listener failed:', {
-          user: currentUser && currentUser.uid,
-          courseId,
-          presentationId,
-          error
-        });
-      }
-    });
+    if (!presentationId || !courseId || !presentation || typeof presentation.currentSlideIndex !== 'number') return;
+    const q = query(
+      collectionGroup(db, 'comments'),
+      where('courseId', '==', courseId),
+      where('slideIndex', '==', presentation.currentSlideIndex),
+      orderBy('timestamp', 'asc')
+    );
+    const unsub = onSnapshot(q, (snapshot) => {
+      // Filter by presentationId in JS
+      const allComments = snapshot.docs
+        .map(doc => ({ ...doc.data(), id: doc.id }))
+        .filter(c => c.presentationId === presentationId);
+      setComments(allComments);
+    }, (error) => { console.error('[DEBUG][Firestore Read][ERROR] collectionGroup onSnapshot:', error); });
     return () => unsub();
-  }, [editorState.isPresenting, presentationId, courseId, presentation.slides, presentation.currentSlideIndex]);
+  }, [presentationId, courseId, presentation?.currentSlideIndex]);
 
   // Find selected element from current slide
   const selectedElement = React.useMemo(() => {
@@ -537,14 +537,20 @@ export default function PresentationEditorV3({ courseId, presentationId = 'demo-
     if (!commentInput.trim() || !currentUser) return;
     const currentSlide = presentation.slides[presentation.currentSlideIndex];
     if (!currentSlide) return;
-    const commentsCol = collection(db, 'courses', courseId, 'presentations', presentationId, 'slides', currentSlide.id, 'comments');
-    await addDoc(commentsCol, {
+    // Use the same structure as student comments so collectionGroup query works
+    const commentData = {
       text: commentInput,
       username: currentUser.displayName || currentUser.email || currentUser.uid,
+      userId: currentUser.uid,
       likedBy: {},
-      timePosted: serverTimestamp(),
       groupId: null
-    });
+    };
+    await PresentationService.addStudentComment(
+      courseId,
+      presentationId,
+      presentation.currentSlideIndex,
+      commentData
+    );
     setCommentInput("");
   };
   // Like handler (likedBy map logic)
@@ -561,14 +567,18 @@ export default function PresentationEditorV3({ courseId, presentationId = 'demo-
       }
     }
     if (!likeUserId) return;
-    const currentSlide = presentation.slides[presentation.currentSlideIndex];
-    if (!currentSlide) return;
-    if (comment.likedBy && comment.likedBy[likeUserId]) return;
     const newLikedBy = { ...(comment.likedBy || {}) };
-    newLikedBy[likeUserId] = true;
-    const commentRef = doc(db, 'courses', courseId, 'presentations', presentationId, 'slides', currentSlide.id, 'comments', comment.id);
+    if (newLikedBy[likeUserId]) {
+      // If already liked, remove the like (toggle off)
+      delete newLikedBy[likeUserId];
+    } else {
+      // If not liked, add the like (toggle on)
+      newLikedBy[likeUserId] = true;
+    }
+    // Update the comment in the correct subcollection path
+    const commentRef = doc(db, 'courses', courseId, 'presentations', presentationId, 'responses', comment.userId, 'comments', comment.id);
     const payload = { likedBy: newLikedBy };
-    console.log('[handleLike] Updating comment with payload:', payload);
+    console.log('[handleLike] Toggling like, payload:', payload);
     await updateDoc(commentRef, payload);
   };
 
@@ -718,11 +728,10 @@ export default function PresentationEditorV3({ courseId, presentationId = 'demo-
                       >
                         {/* Like icon and count */}
                         <button
-                          className={`flex items-center mr-3 text-gray-500 hover:text-primary-600 focus:outline-none ${alreadyLiked ? 'opacity-50 cursor-not-allowed' : ''}`}
+                          className={`flex items-center mr-3 text-gray-500 hover:text-primary-600 focus:outline-none`}
                           onClick={() => handleLike(c)}
                           tabIndex={0}
                           aria-label="Like comment"
-                          disabled={alreadyLiked}
                         >
                           <ThumbsUp className="w-5 h-5 mr-1" />
                           <span className="text-sm font-semibold">{likeCount}</span>

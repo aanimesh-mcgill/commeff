@@ -76,12 +76,14 @@ service cloud.firestore {
       match /responses/{userId} {
         // Allow all enrolled students and instructors to read all responses
         allow read: if isEnrolledStudent(courseId) || isInstructor(courseId);
-        // Only the owner can write their own response
+        // Only the owner can write their own response document (not subcollections)
         allow write: if request.auth != null && request.auth.uid == userId;
-        // Comments subcollection: allow all enrolled students and instructors to read, only owner can write
+        // Comments subcollection: allow all enrolled students and instructors to read, and allow any enrolled student or instructor to update likedBy field
         match /comments/{commentId} {
           allow read: if isEnrolledStudent(courseId) || isInstructor(courseId);
-          allow write: if request.auth != null && request.auth.uid == userId;
+          // Allow any enrolled student, instructor, or the owner to update any field (restore working likes)
+          allow update: if (isEnrolledStudent(courseId) || isInstructor(courseId) || request.auth.uid == userId);
+          allow create, delete: if request.auth != null && request.auth.uid == userId;
         }
       }
     }

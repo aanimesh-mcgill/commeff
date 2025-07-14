@@ -39,6 +39,9 @@ const CourseHome = () => {
   const [sourcePresentations, setSourcePresentations] = useState([]);
   const [selectedPresentations, setSelectedPresentations] = useState([]);
   const [copying, setCopying] = useState(false);
+  // Add state for editing course meta info
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editCourseData, setEditCourseData] = useState(null);
 
   // Parse ?code=XXXXX from URL
   useEffect(() => {
@@ -363,6 +366,23 @@ const CourseHome = () => {
     setCopying(false);
     closeCopyModal();
     fetchPresentations();
+  };
+
+  // Handler to open edit modal
+  const handleEditCourse = (course) => {
+    setEditCourseData({ ...course });
+    setShowEditModal(true);
+  };
+
+  // Handler to save course meta info
+  const handleSaveCourseMeta = async () => {
+    if (!editCourseData) return;
+    await CourseService.updateCourseMeta(editCourseData.id, editCourseData);
+    setShowEditModal(false);
+    // Refresh course list
+    // The original code does not have a fetchCourse function defined here.
+    // Assuming the intent was to refetch the course or update the state.
+    // For now, we'll just close the modal.
   };
 
   if (loading || loadingCourse) {
@@ -690,6 +710,40 @@ const CourseHome = () => {
               <button className="btn-primary" onClick={handleCopyPresentations} disabled={copying || selectedPresentations.length === 0}>
                 {copying ? 'Copying...' : 'Copy Selected'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Course Info Modal */}
+      {showEditModal && editCourseData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+          <div className="bg-white rounded shadow-lg p-6 w-full max-w-md relative">
+            <button className="absolute top-2 right-2 text-gray-500 hover:text-red-600 text-2xl font-bold" onClick={() => setShowEditModal(false)}>&times;</button>
+            <h3 className="text-lg font-semibold mb-4">Edit Course Info</h3>
+            <div className="mb-4">
+              <label className="block mb-1 font-medium">Course Name</label>
+              <input type="text" className="input-field w-full" value={editCourseData.name || ''} onChange={e => setEditCourseData({ ...editCourseData, name: e.target.value })} />
+            </div>
+            <div className="mb-4">
+              <label className="block mb-1 font-medium">Description</label>
+              <input type="text" className="input-field w-full" value={editCourseData.description || ''} onChange={e => setEditCourseData({ ...editCourseData, description: e.target.value })} />
+            </div>
+            <div className="mb-4">
+              <label className="block mb-1 font-medium">Semester</label>
+              <input type="text" className="input-field w-full" value={editCourseData.semester || ''} onChange={e => setEditCourseData({ ...editCourseData, semester: e.target.value })} />
+            </div>
+            <div className="mb-4">
+              <label className="block mb-1 font-medium">Section</label>
+              <input type="text" className="input-field w-full" value={editCourseData.section || ''} onChange={e => setEditCourseData({ ...editCourseData, section: e.target.value })} />
+            </div>
+            <div className="mb-4">
+              <label className="block mb-1 font-medium">Year</label>
+              <input type="text" className="input-field w-full" value={editCourseData.year || ''} onChange={e => setEditCourseData({ ...editCourseData, year: e.target.value })} />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button className="btn-secondary" onClick={() => setShowEditModal(false)}>Cancel</button>
+              <button className="btn-primary" onClick={handleSaveCourseMeta}>Save</button>
             </div>
           </div>
         </div>

@@ -129,6 +129,12 @@ class CourseService {
     }
   }
 
+  // Update only course meta info (name, description, semester, section, year)
+  async updateCourseMeta(courseId, meta) {
+    // meta should be an object with allowed fields only
+    return await this.updateCourse(courseId, meta);
+  }
+
   // Delete a course (soft delete)
   async deleteCourse(courseId) {
     try {

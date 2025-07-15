@@ -1,4 +1,4 @@
-import { collection, addDoc, getDocs, query, orderBy, serverTimestamp, doc, deleteDoc, updateDoc, getDoc, setDoc, where } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, orderBy, serverTimestamp, doc, deleteDoc, updateDoc, getDoc, setDoc, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { getAuth } from 'firebase/auth';
 
@@ -434,6 +434,29 @@ class PresentationService {
       console.error('[PresentationService] Error getting all responses:', err);
       throw err;
     }
+  }
+
+  // Get groups for a slide (real-time listener)
+  listenToGroups(courseId, presentationId, slideIndex, callback) {
+    const groupsCol = collection(db, 'courses', courseId, 'presentations', presentationId, 'slides', String(slideIndex), 'groups');
+    return onSnapshot(groupsCol, (snapshot) => {
+      const groups = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      callback(groups);
+    });
+  }
+
+  // Add or update a group (by id)
+  async setGroup(courseId, presentationId, slideIndex, group) {
+    const groupsCol = collection(db, 'courses', courseId, 'presentations', presentationId, 'slides', String(slideIndex), 'groups');
+    const groupDoc = doc(groupsCol, group.id);
+    await setDoc(groupDoc, group, { merge: true });
+  }
+
+  // Delete a group
+  async deleteGroup(courseId, presentationId, slideIndex, groupId) {
+    const groupsCol = collection(db, 'courses', courseId, 'presentations', presentationId, 'slides', String(slideIndex), 'groups');
+    const groupDoc = doc(groupsCol, groupId);
+    await deleteDoc(groupDoc);
   }
 }
 

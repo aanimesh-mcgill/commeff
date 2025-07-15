@@ -16,6 +16,25 @@ const CourseList = ({ title = "All Courses", showCreateButton = true, filterByIn
   const { currentUser, userProfile } = useAuth();
   const [tab, setTab] = useState('all'); // 'all' or 'enrolled'
 
+  // Add state for editing course meta info
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editCourseData, setEditCourseData] = useState(null);
+
+  // Handler to open edit modal
+  const handleEditCourse = (course) => {
+    setEditCourseData({ ...course });
+    setShowEditModal(true);
+  };
+
+  // Handler to save course meta info
+  const handleSaveCourseMeta = async () => {
+    if (!editCourseData) return;
+    await CourseService.updateCourseMeta(editCourseData.id, editCourseData);
+    setShowEditModal(false);
+    // Refresh course list
+    loadCourses();
+  };
+
   // Default to 'enrolled' tab if student and has enrolled courses
   useEffect(() => {
     if (userProfile?.role === 'student' && userProfile.enrolledCourses && userProfile.enrolledCourses.length > 0) {
@@ -228,16 +247,12 @@ const CourseList = ({ title = "All Courses", showCreateButton = true, filterByIn
         {filteredCourses.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredCourses.map(course => (
-              <Link
+              <CourseCard
                 key={course.id}
-                to={`/course/${course.id}`}
-                className="block"
-              >
-                <CourseCard
-                  course={course}
-                  isOwner={course.instructorId === currentUser?.uid}
-                />
-              </Link>
+                course={course}
+                isOwner={course.instructorId === currentUser?.uid}
+                onEdit={handleEditCourse}
+              />
             ))}
           </div>
         ) : (
@@ -263,6 +278,38 @@ const CourseList = ({ title = "All Courses", showCreateButton = true, filterByIn
           </div>
         )}
       </div>
+      {showEditModal && editCourseData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+          <div className="bg-white rounded shadow-lg p-6 w-full max-w-md relative">
+            <button className="absolute top-2 right-2 text-gray-500 hover:text-red-600 text-2xl font-bold" onClick={() => setShowEditModal(false)}>&times;</button>
+            <h3 className="text-lg font-semibold mb-4">Edit Course Info</h3>
+            <div className="mb-4">
+              <label className="block mb-1 font-medium">Course Name</label>
+              <input type="text" className="input-field w-full" value={editCourseData.name || ''} onChange={e => setEditCourseData({ ...editCourseData, name: e.target.value })} />
+            </div>
+            <div className="mb-4">
+              <label className="block mb-1 font-medium">Description</label>
+              <input type="text" className="input-field w-full" value={editCourseData.description || ''} onChange={e => setEditCourseData({ ...editCourseData, description: e.target.value })} />
+            </div>
+            <div className="mb-4">
+              <label className="block mb-1 font-medium">Semester</label>
+              <input type="text" className="input-field w-full" value={editCourseData.semester || ''} onChange={e => setEditCourseData({ ...editCourseData, semester: e.target.value })} />
+            </div>
+            <div className="mb-4">
+              <label className="block mb-1 font-medium">Section</label>
+              <input type="text" className="input-field w-full" value={editCourseData.section || ''} onChange={e => setEditCourseData({ ...editCourseData, section: e.target.value })} />
+            </div>
+            <div className="mb-4">
+              <label className="block mb-1 font-medium">Year</label>
+              <input type="text" className="input-field w-full" value={editCourseData.year || ''} onChange={e => setEditCourseData({ ...editCourseData, year: e.target.value })} />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button className="btn-secondary" onClick={() => setShowEditModal(false)}>Cancel</button>
+              <button className="btn-primary" onClick={handleSaveCourseMeta}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -9,6 +9,7 @@ import { useAuth } from '../contexts/AuthContext';
 import PresentationService from '../services/PresentationService';
 import { ThumbsUp, MessageSquare } from 'lucide-react';
 import PresentationFullScreen from './PresentationFullScreen';
+import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 
 // Types (replace with import from types/presentation if available)
 const initialPresentation = {
@@ -46,6 +47,9 @@ export default function PresentationEditorV3({ courseId, presentationId = 'demo-
   const saveTimeoutRef = useRef(null);
   // Add state for debug info
   const [debugInfo, setDebugInfo] = useState({ instructorId: '', userRole: '' });
+  const [commentGroups, setCommentGroups] = useState([]); // [{id, label, commentIds:[], collapsed:false, x:0, y:0}]
+  const [groupedCommentIds, setGroupedCommentIds] = useState([]); // [commentId,...]
+  const slideIndex = presentation.currentSlideIndex || 0;
 
   // In the render, before passing slides to SlidesSidebar
   const safeSlides = useMemo(() => {
@@ -393,6 +397,130 @@ export default function PresentationEditorV3({ courseId, presentationId = 'demo-
     return () => unsub();
   }, [presentationId, courseId, presentation?.currentSlideIndex]);
 
+  // Real-time sync: listen to groups in Firestore
+  useEffect(() => {
+    if (!courseId || !presentationId || typeof slideIndex !== 'number') return;
+    const unsub = PresentationService.listenToGroups(courseId, presentationId, slideIndex, (groups) => {
+      setCommentGroups(groups);
+      setGroupedCommentIds(groups.flatMap(g => g.commentIds));
+    });
+    return () => unsub && unsub();
+  }, [courseId, presentationId, slideIndex]);
+
+  const persistGroup = useCallback((group) => {
+    if (!courseId || !presentationId || typeof slideIndex !== 'number') return;
+    PresentationService.setGroup(courseId, presentationId, slideIndex, group);
+  }, [courseId, presentationId, slideIndex]);
+  const persistDeleteGroup = useCallback((groupId) => {
+    if (!courseId || !presentationId || typeof slideIndex !== 'number') return;
+    PresentationService.deleteGroup(courseId, presentationId, slideIndex, groupId);
+  }, [courseId, presentationId, slideIndex]);
+
+  const createGroup = (commentId) => {
+    const newGroup = {
+      id: 'group_' + Math.random().toString(36).substr(2, 9),
+      label: 'New Group',
+      commentIds: [commentId],
+      collapsed: false,
+      x: 40 + Math.random() * 100,
+      y: 40 + Math.random() * 100
+    };
+    setCommentGroups(prev => [...prev, newGroup]);
+    setGroupedCommentIds(prev => [...prev, commentId]);
+    persistGroup(newGroup);
+  };
+  const addCommentToGroup = (groupId, commentId) => {
+    setCommentGroups(prev => prev.map(g => {
+      if (g.id === groupId && !g.commentIds.includes(commentId)) {
+        const updated = { ...g, commentIds: [...g.commentIds, commentId] };
+        persistGroup(updated);
+        return updated;
+      }
+      return g;
+    }));
+    setGroupedCommentIds(prev => [...prev, commentId]);
+  };
+  const removeCommentFromGroups = (commentId) => {
+    setCommentGroups(prev => prev.map(g => {
+      if (g.commentIds.includes(commentId)) {
+        const updated = { ...g, commentIds: g.commentIds.filter(id => id !== commentId) };
+        persistGroup(updated);
+        return updated;
+      }
+      return g;
+    }));
+    setGroupedCommentIds(prev => prev.filter(id => id !== commentId));
+  };
+  const updateGroupLabel = (groupId, label) => {
+    setCommentGroups(prev => prev.map(g => {
+      if (g.id === groupId) {
+        const updated = { ...g, label };
+        persistGroup(updated);
+        return updated;
+      }
+      return g;
+    }));
+  };
+  const deleteGroup = (groupId) => {
+    setCommentGroups(prev => prev.filter(g => g.id !== groupId));
+    persistDeleteGroup(groupId);
+  };
+  const toggleGroupCollapse = (groupId) => {
+    setCommentGroups(prev => prev.map(g => {
+      if (g.id === groupId) {
+        const updated = { ...g, collapsed: !g.collapsed };
+        persistGroup(updated);
+        return updated;
+      }
+      return g;
+    }));
+  };
+  const updateGroupPosition = (groupId, x, y) => {
+    setCommentGroups(prev => prev.map(g => {
+      if (g.id === groupId) {
+        const updated = { ...g, x, y };
+        persistGroup(updated);
+        return updated;
+      }
+      return g;
+    }));
+  };
+  const dragState = useRef({ groupId: null, offsetX: 0, offsetY: 0 });
+  const handleGroupMouseDown = (e, group) => {
+    dragState.current = {
+      groupId: group.id,
+      offsetX: e.clientX - (group.x || 0),
+      offsetY: e.clientY - (group.y || 0)
+    };
+    window.addEventListener('mousemove', handleGroupMouseMove);
+    window.addEventListener('mouseup', handleGroupMouseUp);
+  };
+  const handleGroupMouseMove = (e) => {
+    const { groupId, offsetX, offsetY } = dragState.current;
+    if (!groupId) return;
+    const x = e.clientX - offsetX;
+    const y = e.clientY - offsetY;
+    updateGroupPosition(groupId, x, y);
+  };
+  const handleGroupMouseUp = () => {
+    dragState.current = { groupId: null, offsetX: 0, offsetY: 0 };
+    window.removeEventListener('mousemove', handleGroupMouseMove);
+    window.removeEventListener('mouseup', handleGroupMouseUp);
+  };
+  const onDragEnd = (result) => {
+    const { source, destination, draggableId } = result;
+    if (!destination) return;
+    if (destination.droppableId === 'left-panel' && (!destination.index || destination.index === 0)) {
+      if (!groupedCommentIds.includes(draggableId)) createGroup(draggableId);
+      return;
+    }
+    if (destination.droppableId.startsWith('group-')) {
+      const groupId = destination.droppableId;
+      if (!groupedCommentIds.includes(draggableId)) addCommentToGroup(groupId, draggableId);
+      return;
+    }
+  };
+
   // Find selected element from current slide
   const selectedElement = React.useMemo(() => {
     const slide = presentation.slides[presentation.currentSlideIndex];
@@ -693,73 +821,99 @@ export default function PresentationEditorV3({ courseId, presentationId = 'demo-
       {showDiscussion && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black bg-opacity-60" style={{pointerEvents: 'auto'}}>
           <div className="absolute inset-0" onClick={e => { e.stopPropagation(); setShowDiscussion(false); }} />
-          <div className="relative flex w-full h-full z-70">
-            {/* Left: Grouping area (placeholder) */}
-            <div className="flex-1 bg-white/80 flex flex-col items-center justify-center border-r border-gray-300">
-              <div className="text-gray-400 text-lg">(Grouping area placeholder)</div>
-            </div>
-            {/* Right: Chat/comments */}
-            <div className="w-[400px] max-w-full bg-white/80 flex flex-col h-full shadow-xl relative">
-              {/* Header */}
-              <div className="flex items-center justify-between px-4 py-3 border-b">
-                <div className="font-semibold text-lg">Slide Discussion</div>
-                {/* X button to close overlay */}
-                <button
-                  className="ml-2 text-gray-500 hover:text-red-600 text-2xl font-bold focus:outline-none"
-                  onClick={e => { e.stopPropagation(); setShowDiscussion(false); }}
-                  title="Close discussion"
-                  aria-label="Close discussion"
-                >×</button>
-              </div>
-              {/* Chat panel */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                {comments.length === 0 ? (
-                  <div className="text-gray-400 text-center">No messages yet.</div>
-                ) : (
-                  comments.map((c) => {
-                    const likeUserId = currentUser ? currentUser.uid : '';
-                    const alreadyLiked = c.likedBy && likeUserId && c.likedBy[likeUserId];
-                    const likeCount = c.likedBy ? Object.keys(c.likedBy).length : 0;
-                    return (
+          <DragDropContext onDragEnd={onDragEnd}>
+            <div className="flex flex-row w-full h-full">
+              {/* Left: Grouping area */}
+              <div className="flex-1 bg-white/80 border-r border-gray-300 p-4 relative overflow-hidden" style={{ minHeight: 500, zIndex: 50, pointerEvents: 'auto', border: '2px dashed #b3b3b3', background: 'rgba(255,255,255,0.92)' }}>
+                <Droppable droppableId="left-panel" type="COMMENT">
+                  {(provided) => (
+                    <div ref={provided.innerRef} {...provided.droppableProps} style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, zIndex: 1, pointerEvents: 'auto' }} />
+                  )}
+                </Droppable>
+                {commentGroups.map((group, groupIdx) => (
+                  <Droppable droppableId={group.id} type="COMMENT" key={group.id}>
+                    {(groupProvided, groupSnapshot) => (
                       <div
-                        key={c.id}
-                        className="bg-gray-100 rounded px-3 py-2 flex items-center group"
-                        title={c.username}
+                        ref={groupProvided.innerRef}
+                        {...groupProvided.droppableProps}
+                        className="absolute bg-gray-100 rounded shadow p-2"
+                        style={{
+                          left: group.x || 40,
+                          top: group.y || 40,
+                          minWidth: 220,
+                          zIndex: groupSnapshot.isDraggingOver ? 999 : 60 + groupIdx,
+                          cursor: 'move',
+                          pointerEvents: 'auto',
+                          boxShadow: groupSnapshot.isDraggingOver ? '0 0 0 3px #4f46e5' : undefined
+                        }}
+                        onMouseDown={e => handleGroupMouseDown(e, group)}
                       >
-                        {/* Like icon and count */}
-                        <button
-                          className={`flex items-center mr-3 text-gray-500 hover:text-primary-600 focus:outline-none`}
-                          onClick={() => handleLike(c)}
-                          tabIndex={0}
-                          aria-label="Like comment"
-                        >
-                          <ThumbsUp className="w-5 h-5 mr-1" />
-                          <span className="text-sm font-semibold">{likeCount}</span>
-                        </button>
-                        {/* Comment text */}
-                        <span className="text-gray-800 text-sm" style={{ cursor: 'pointer' }}>
-                          {c.text}
-                        </span>
+                        <div className="flex items-center mb-2">
+                          <input
+                            className="font-bold text-lg flex-1 bg-transparent border-b border-gray-300 focus:outline-none"
+                            value={group.label}
+                            onChange={e => updateGroupLabel(group.id, e.target.value)}
+                          />
+                          <button className="ml-2 text-red-500" onClick={() => deleteGroup(group.id)} title="Delete group">&times;</button>
+                          <button className="ml-2 text-gray-500" onClick={() => toggleGroupCollapse(group.id)} title="Collapse/Expand">{group.collapsed ? '+' : '-'}</button>
+                        </div>
+                        {!group.collapsed && (
+                          <div>
+                            {group.commentIds.map((cid, idx) => {
+                              const comment = comments.find(c => c.id === cid);
+                              if (!comment) return null;
+                              return (
+                                <div key={cid} className="bg-white rounded px-2 py-1 mb-1 border">
+                                  {comment.text}
+                                  <button className="ml-2 text-xs text-gray-400" onClick={() => removeCommentFromGroups(cid)}>Remove</button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
-                    );
-                  })
-                )}
+                    )}
+                  </Droppable>
+                ))}
               </div>
-              {/* Input box */}
-              <form className="flex items-center border-t px-4 py-3" onSubmit={handleCommentSubmit}>
-                <input
-                  type="text"
-                  className="flex-1 border rounded px-3 py-2 mr-2 focus:outline-none focus:border-primary-500"
-                  placeholder="Type a comment..."
-                  value={commentInput}
-                  onChange={e => setCommentInput(e.target.value)}
-                />
-                <button type="submit" className="bg-primary-600 text-white px-4 py-2 rounded font-semibold disabled:opacity-50" disabled={!commentInput.trim()}>
-                  Send
-                </button>
-              </form>
+              {/* Right: Chat/comments */}
+              <div className="w-[400px] max-w-full bg-white/80 flex flex-col h-full shadow-xl">
+                <div className="flex items-center justify-between px-4 py-3 border-b">
+                  <div className="font-semibold text-lg">Slide Discussion</div>
+                  <button onClick={() => setShowDiscussion(false)} className="text-gray-500 hover:text-primary-600 text-xl">&times;</button>
+                </div>
+                <Droppable droppableId="right-panel" type="COMMENT" isDropDisabled={true}>
+                  {(provided) => (
+                    <div className="flex-1 overflow-y-auto p-4 space-y-3" ref={provided.innerRef} {...provided.droppableProps}>
+                      {comments.length === 0 ? (
+                        <div className="text-gray-400 text-center">No messages yet.</div>
+                      ) : (
+                        comments.map((c, index) => {
+                          const isGrouped = groupedCommentIds.includes(c.id);
+                          return (
+                            <Draggable draggableId={c.id} index={index} key={c.id}>
+                              {(dragProvided, dragSnapshot) => (
+                                <div
+                                  ref={dragProvided.innerRef}
+                                  {...dragProvided.draggableProps}
+                                  {...dragProvided.dragHandleProps}
+                                  className={`bg-gray-100 rounded px-3 py-2 flex items-center group ${isGrouped ? 'text-green-600 font-bold' : 'text-gray-800'}`}
+                                  style={{ cursor: 'pointer' }}
+                                >
+                                  <span className="text-sm mr-2">{c.text}</span>
+                                </div>
+                              )}
+                            </Draggable>
+                          );
+                        })
+                      )}
+                      {provided.placeholder}
+                    </div>
+                  )}
+                </Droppable>
+              </div>
             </div>
-          </div>
+          </DragDropContext>
         </div>
       )}
     </div>

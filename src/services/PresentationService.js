@@ -114,6 +114,24 @@ class PresentationService {
     }
   }
 
+  // Get the current live presentation for a course
+  async getLivePresentation(courseId) {
+    try {
+      console.log('[PresentationService] Getting live presentation for course:', courseId);
+      const courseDoc = await getDoc(doc(db, 'courses', courseId));
+      if (!courseDoc.exists()) {
+        throw new Error('Course not found');
+      }
+      const courseData = courseDoc.data();
+      const livePresentationId = courseData.livePresentation;
+      console.log('[PresentationService] Live presentation ID:', livePresentationId);
+      return livePresentationId;
+    } catch (err) {
+      console.error('[PresentationService] Error getting live presentation:', err);
+      throw err;
+    }
+  }
+
   // Set a presentation as live
   async setLivePresentation(courseId, presentationId) {
     try {

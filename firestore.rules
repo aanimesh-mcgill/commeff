@@ -64,7 +64,7 @@ service cloud.firestore {
       );
 
       // Slides subcollection: only instructor can read/write
-      match /slides/{slideId} {
+      match /slides/{slideIndex} {
         allow read, write: if request.auth != null;
         // Comments subcollection: instructor or enrolled student can read/write
         match /comments/{commentId} {

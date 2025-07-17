@@ -29,6 +29,8 @@ const LivePresentationViewer = () => {
   const [userId, setUserId] = useState('');
   const [showPrompt, setShowPrompt] = useState(false);
   const [audienceMode, setAudienceMode] = useState('enrolledUsers');
+  const [groups, setGroups] = useState([]); // Firestore-synced groups
+  const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
 
   // Version tracking
   const VERSION = "1.1.3";
@@ -52,6 +54,17 @@ const LivePresentationViewer = () => {
       console.log('[DEBUG] Presentation doc is null');
     }
   }, [currentUser, userProfile, presentation]);
+
+  // Listen to groups for the current slide
+  useEffect(() => {
+    if (!courseId || !presentationId || slides.length === 0) return;
+    const slideIndex = presentation?.currentSlideIndex || 0;
+    setCurrentSlideIndex(slideIndex);
+    const unsub = PresentationService.listenToGroups(courseId, presentationId, slideIndex, (groups) => {
+      setGroups(groups);
+    });
+    return () => unsub && unsub();
+  }, [courseId, presentationId, presentation?.currentSlideIndex, slides.length]);
 
   // Fetch live presentation and slides
   useEffect(() => {
@@ -929,6 +942,7 @@ const LivePresentationViewer = () => {
         const groupId = "group_" + Math.random().toString(36).substr(2, 9);
         const group = document.createElement("div");
         group.className = "note-box";
+        group.dataset.groupId = groupId; // Add groupId to DOM element
         group.style.left = (e.clientX - 120) + "px";
         group.style.top = (e.clientY - 60) + "px";
         
@@ -995,6 +1009,19 @@ const LivePresentationViewer = () => {
         document.addEventListener("mouseup", () => {
           isDragging = false;
         });
+
+        // Persist group creation with error handling
+        const groupObj = {
+          id: groupId,
+          label: 'New Group',
+          commentIds: [id],
+          x: parseInt(group.style.left, 10),
+          y: parseInt(group.style.top, 10)
+        };
+        console.log('[DEBUG] Creating group (drop):', { courseId, presentationId, currentSlideIndex, groupObj });
+        PresentationService.setGroup(courseId, presentationId, currentSlideIndex, groupObj)
+          .then(() => console.log('[DEBUG] Group created successfully (drop)'))
+          .catch(err => console.error('[DEBUG] Group creation failed (drop):', err));
       }
     });
 
@@ -1060,6 +1087,7 @@ const LivePresentationViewer = () => {
           const groupId = "group_" + Math.random().toString(36).substr(2, 9);
           const group = document.createElement("div");
           group.className = "note-box";
+          group.dataset.groupId = groupId; // Add groupId to DOM element
           group.style.left = (e.clientX - 120) + "px";
           group.style.top = (e.clientY - 60) + "px";
           
@@ -1097,6 +1125,16 @@ const LivePresentationViewer = () => {
           // Add drag event listeners
           const li = group.querySelector("li");
           li.addEventListener("dragstart", e => draggedEl = li);
+
+          // Persist group creation
+          const groupObj = {
+            id: groupId,
+            label: 'New Group',
+            commentIds: [id],
+            x: parseInt(group.style.left, 10),
+            y: parseInt(group.style.top, 10)
+          };
+          PresentationService.setGroup(courseId, presentationId, currentSlideIndex, groupObj);
         }
       });
     }
@@ -1121,10 +1159,21 @@ const LivePresentationViewer = () => {
       
       updateGroupLikes(group);
       updateGroupReplies(commentId);
+
+      // Persist group update
+      const groupObj = {
+        id: group.dataset.groupId, // Use existing groupId
+        label: group.querySelector('.note-header span[contenteditable]').innerText, // Get new label
+        commentIds: Array.from(group.querySelectorAll('li[data-id]')).map(li => li.dataset.id),
+        x: parseInt(group.style.left, 10),
+        y: parseInt(group.style.top, 10)
+      };
+      PresentationService.setGroup(courseId, presentationId, currentSlideIndex, groupObj);
     }
 
     function removeGroup(el) {
       const group = el.closest('.note-box');
+      const groupId = group.dataset.groupId; // Assuming group has a data-groupId attribute
       const comments = group.querySelectorAll('li[data-id]');
       
       // Remove grouped state from all comments
@@ -1148,6 +1197,11 @@ const LivePresentationViewer = () => {
           existing.classList.remove("grouped");
         }
       });
+
+      // Delete the group from Firestore
+      if (groupId) {
+        PresentationService.deleteGroup(courseId, presentationId, currentSlideIndex, groupId);
+      }
     }
 
     function selectAll(el) {

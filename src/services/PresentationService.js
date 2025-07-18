@@ -476,6 +476,47 @@ class PresentationService {
     const groupDoc = doc(groupsCol, groupId);
     await deleteDoc(groupDoc);
   }
+
+
+
+  // Update comment likes
+  async updateCommentLikes(courseId, presentationId, slideIndex, commentId, likeCount) {
+    try {
+      console.log('[PresentationService] Updating comment likes:', { courseId, presentationId, slideIndex, commentId, likeCount });
+      const commentDoc = doc(db, 'courses', courseId, 'presentations', presentationId, 'comments', commentId);
+      await updateDoc(commentDoc, { likes: likeCount });
+      console.log('[PresentationService] Comment likes updated successfully');
+    } catch (err) {
+      console.error('[PresentationService] Error updating comment likes:', err);
+      throw err;
+    }
+  }
+
+  // Update comment replies
+  async updateCommentReplies(courseId, presentationId, slideIndex, commentId, replies, replyLikes) {
+    try {
+      console.log('[PresentationService] Updating comment replies:', { courseId, presentationId, slideIndex, commentId, replies, replyLikes });
+      const commentDoc = doc(db, 'courses', courseId, 'presentations', presentationId, 'comments', commentId);
+      await updateDoc(commentDoc, { replies, replyLikes });
+      console.log('[PresentationService] Comment replies updated successfully');
+    } catch (err) {
+      console.error('[PresentationService] Error updating comment replies:', err);
+      throw err;
+    }
+  }
+
+  // Remove comment
+  async removeComment(courseId, presentationId, slideIndex, commentId) {
+    try {
+      console.log('[PresentationService] Removing comment:', { courseId, presentationId, slideIndex, commentId });
+      const commentDoc = doc(db, 'courses', courseId, 'presentations', presentationId, 'comments', commentId);
+      await deleteDoc(commentDoc);
+      console.log('[PresentationService] Comment removed successfully');
+    } catch (err) {
+      console.error('[PresentationService] Error removing comment:', err);
+      throw err;
+    }
+  }
 }
 
 export default new PresentationService(); 

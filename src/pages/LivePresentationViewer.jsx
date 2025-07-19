@@ -218,9 +218,17 @@ const LivePresentationViewer = () => {
     setShowPrompt(false);
   };
 
-  // Initialize vanilla JS discussion overlay
+  // Initialize vanilla JS discussion overlay - ONLY ONCE
   useEffect(() => {
     if (!containerRef.current || !courseId || !presentationId) return;
+    
+    console.log('[LiveViewer] Initializing HTML structure - this should only happen once');
+    
+    // Check if HTML structure already exists
+    if (containerRef.current.querySelector('.container')) {
+      console.log('[LiveViewer] HTML structure already exists, skipping initialization');
+      return;
+    }
 
     // Create the HTML structure with slide and toggle panel
     containerRef.current.innerHTML = `
@@ -662,15 +670,22 @@ const LivePresentationViewer = () => {
     `;
     document.head.appendChild(style);
 
-    // Initialize vanilla JS functionality
-    initVanillaJS();
+    // Initialize vanilla JS functionality - ONLY ONCE
+    if (!window.vanillaJSInitialized) {
+      console.log('[LiveViewer] First time initialization of vanilla JS');
+      initVanillaJS();
+      window.vanillaJSInitialized = true;
+    } else {
+      console.log('[LiveViewer] Vanilla JS already initialized, updating content only');
+      updateContentOnly();
+    }
   }, [courseId, presentationId, slides, presentation, comments, groups, userId, currentUser]);
 
   const initVanillaJS = () => {
     console.log('[LiveViewer] initVanillaJS called, previous panel state:', window.isDiscussionOpen);
     
     // Global variables
-    let draggedEl = null;
+    window.draggedEl = null;
     let userLikes = new Set();
     
     // Use global variable to track discussion panel state
@@ -805,12 +820,13 @@ const LivePresentationViewer = () => {
       const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
       const isLiked = comment.likedBy && comment.likedBy.includes(currentUser?.uid || 'anonymous');
       const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
+      const likeCount = comment.likedBy && Array.isArray(comment.likedBy) ? comment.likedBy.length : 0;
       
       el.innerHTML = `
         <div class="text">
           <div class="comment-text">${comment.text}</div>
           <div class="comment-actions">
-            <span class="${likeClass}" onclick="like('${comment.id}', this)">👍 ${comment.likedBy ? comment.likedBy.length : 0}</span>
+            <span class="${likeClass}" onclick="like('${comment.id}', this)">👍 ${likeCount}</span>
             <button class="reply-btn" onclick="reply(this)">Reply</button>
             <button class="remove-btn" onclick="removeComment('${comment.id}', this)">×</button>
             ${replyToggle}
@@ -834,7 +850,7 @@ const LivePresentationViewer = () => {
         el.appendChild(repliesContainer);
       }
       
-      el.addEventListener("dragstart", e => draggedEl = el);
+      el.addEventListener("dragstart", e => window.draggedEl = el);
       return el;
     }
 
@@ -997,9 +1013,9 @@ const LivePresentationViewer = () => {
 
     slide.addEventListener("drop", async e => {
       e.preventDefault();
-      if (!draggedEl) return;
+      if (!window.draggedEl) return;
 
-      const id = draggedEl.dataset.id || draggedEl.closest("li")?.dataset.id;
+      const id = window.draggedEl.dataset.id || window.draggedEl.closest("li")?.dataset.id;
       if (!id) return;
 
       const comment = comments.find(c => c.id === id);
@@ -1039,7 +1055,7 @@ const LivePresentationViewer = () => {
         
         ul.appendChild(li);
         // Don't remove the original comment, just mark it as grouped
-        draggedEl.classList.add('grouped');
+        window.draggedEl.classList.add('grouped');
         comment.grouped = true;
         updateGroupLikes(targetGroup);
         updateGroupReplies(id);
@@ -1145,9 +1161,9 @@ const LivePresentationViewer = () => {
     if (groupingArea) {
       groupingArea.addEventListener("drop", e => {
         e.preventDefault();
-        if (!draggedEl) return;
+        if (!window.draggedEl) return;
 
-        const id = draggedEl.dataset.id || draggedEl.closest("li")?.dataset.id;
+        const id = window.draggedEl.dataset.id || window.draggedEl.closest("li")?.dataset.id;
         if (!id) return;
 
         const comment = comments.find(c => c.id === id);
@@ -1187,7 +1203,7 @@ const LivePresentationViewer = () => {
           
           ul.appendChild(li);
           // Don't remove the original comment, just mark it as grouped
-          draggedEl.classList.add('grouped');
+          window.draggedEl.classList.add('grouped');
           comment.grouped = true;
           updateGroupLikes(targetGroup);
           updateGroupReplies(id);
@@ -1226,10 +1242,10 @@ const LivePresentationViewer = () => {
             </ul>
           `;
           
-          groupingArea.appendChild(group);
-          // Don't remove the original comment, just mark it as grouped
-          draggedEl.classList.add('grouped');
-          comment.grouped = true;
+                  groupingArea.appendChild(group);
+        // Don't remove the original comment, just mark it as grouped
+        window.draggedEl.classList.add('grouped');
+        comment.grouped = true;
           
           // Add drag event listeners
           const li = group.querySelector("li");
@@ -1603,22 +1619,23 @@ const LivePresentationViewer = () => {
         const commentsHtml = groupComments.map(comment => {
           const hasReplies = comment.replies && comment.replies.length > 0;
           const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
-          const isLiked = comment.likedBy && comment.likedBy.includes(currentUser?.uid || 'anonymous');
-          const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
-          
-          return `
-            <li class="grouped-comment" data-id="${comment.id}" data-type="comment" draggable="true">
-              <div class="comment-content">
-                <div class="comment-text">${comment.text}</div>
-                <div class="comment-actions">
-                  <span class="${likeClass}" onclick="like('${comment.id}', this)">👍 ${comment.likedBy ? comment.likedBy.length : 0}</span>
-                  <button class="reply-btn" title="Reply" onclick="reply(this)">🗨️</button>
-                  <span class="remove-comment" onclick="removeFromGroup('${comment.id}', this)">×</span>
-                  ${replyToggle}
-                </div>
-              </div>
-            </li>
-          `;
+                const isLiked = comment.likedBy && comment.likedBy.includes(currentUser?.uid || 'anonymous');
+      const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
+      const likeCount = comment.likedBy && Array.isArray(comment.likedBy) ? comment.likedBy.length : 0;
+      
+      return `
+        <li class="grouped-comment" data-id="${comment.id}" data-type="comment" draggable="true">
+          <div class="comment-content">
+            <div class="comment-text">${comment.text}</div>
+            <div class="comment-actions">
+              <span class="${likeClass}" onclick="like('${comment.id}', this)">👍 ${likeCount}</span>
+              <button class="reply-btn" title="Reply" onclick="reply(this)">🗨️</button>
+              <span class="remove-comment" onclick="removeFromGroup('${comment.id}', this)">×</span>
+              ${replyToggle}
+            </div>
+          </div>
+        </li>
+      `;
         }).join('');
         
         groupElement.innerHTML = `
@@ -1680,6 +1697,171 @@ const LivePresentationViewer = () => {
 
     // Initial slide display
     updateSlideDisplay();
+  };
+
+  const updateContentOnly = () => {
+    console.log('[LiveViewer] updateContentOnly called - updating content without re-initializing');
+    
+    // Update slide display
+    updateSlideDisplay();
+    
+    // Update comments in chat panel without clearing groups
+    const commentList = document.getElementById('commentList');
+    if (commentList) {
+      console.log('[LiveViewer] Updating comments in chat panel');
+      commentList.innerHTML = ''; // Only clear comments, not groups
+      comments.forEach(comment => {
+        const el = renderComment(comment);
+        commentList.appendChild(el);
+      });
+    }
+    
+    // Update groups without clearing existing ones
+    const groupingArea = document.getElementById('groupingArea');
+    if (groupingArea && groups.length > 0) {
+      console.log('[LiveViewer] Updating groups without clearing existing ones');
+      
+      groups.forEach(group => {
+        // Check if group already exists to avoid duplicates
+        const existingGroup = groupingArea.querySelector(`[data-group-id="${group.id}"]`);
+        if (existingGroup) {
+          console.log('[LiveViewer] Group already exists, updating content:', group.id);
+          // Update group content without recreating
+          updateGroupContent(existingGroup, group);
+          return;
+        }
+        
+        // Create new group if it doesn't exist
+        console.log('[LiveViewer] Creating new group:', group.id);
+        createGroupElement(group, groupingArea);
+      });
+    }
+  };
+
+  const updateGroupContent = (groupElement, group) => {
+    // Get comments for this group using simplified data model
+    const groupComments = comments.filter(comment => comment.groupId === group.id);
+    
+    const commentsHtml = groupComments.map(comment => {
+      const hasReplies = comment.replies && comment.replies.length > 0;
+      const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
+      const isLiked = comment.likedBy && comment.likedBy.includes(currentUser?.uid || 'anonymous');
+      const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
+      const likeCount = comment.likedBy && Array.isArray(comment.likedBy) ? comment.likedBy.length : 0;
+      
+      return `
+        <li class="grouped-comment" data-id="${comment.id}" data-type="comment" draggable="true">
+          <div class="comment-content">
+            <div class="comment-text">${comment.text}</div>
+            <div class="comment-actions">
+              <span class="${likeClass}" onclick="like('${comment.id}', this)">👍 ${likeCount}</span>
+              <button class="reply-btn" title="Reply" onclick="reply(this)">🗨️</button>
+              <span class="remove-comment" onclick="removeFromGroup('${comment.id}', this)">×</span>
+              ${replyToggle}
+            </div>
+          </div>
+        </li>
+      `;
+    }).join('');
+    
+    // Update only the comments list, not the entire group
+    const commentsList = groupElement.querySelector('.note-comments');
+    if (commentsList) {
+      commentsList.innerHTML = commentsHtml;
+    }
+    
+    // Add drag event listeners to new group comments
+    groupElement.querySelectorAll('li').forEach(li => {
+      li.addEventListener("dragstart", e => window.draggedEl = li);
+    });
+  };
+
+  const createGroupElement = (group, groupingArea) => {
+    const groupElement = document.createElement("div");
+    groupElement.className = "note-box";
+    groupElement.dataset.groupId = group.id;
+    groupElement.style.left = group.x + "px";
+    groupElement.style.top = group.y + "px";
+    
+    // Get comments for this group using simplified data model
+    const groupComments = comments.filter(comment => comment.groupId === group.id);
+    
+    const commentsHtml = groupComments.map(comment => {
+      const hasReplies = comment.replies && comment.replies.length > 0;
+      const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
+      const isLiked = comment.likedBy && comment.likedBy.includes(currentUser?.uid || 'anonymous');
+      const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
+      const likeCount = comment.likedBy && Array.isArray(comment.likedBy) ? comment.likedBy.length : 0;
+      
+      return `
+        <li class="grouped-comment" data-id="${comment.id}" data-type="comment" draggable="true">
+          <div class="comment-content">
+            <div class="comment-text">${comment.text}</div>
+            <div class="comment-actions">
+              <span class="${likeClass}" onclick="like('${comment.id}', this)">👍 ${likeCount}</span>
+              <button class="reply-btn" title="Reply" onclick="reply(this)">🗨️</button>
+              <span class="remove-comment" onclick="removeFromGroup('${comment.id}', this)">×</span>
+              ${replyToggle}
+            </div>
+          </div>
+        </li>
+      `;
+    }).join('');
+    
+    groupElement.innerHTML = `
+      <div class="note-header" onmousedown="handleGroupMouseDown(event, this.closest('.note-box'))">
+        <span contenteditable onclick="selectAll(this)" onblur="updateGroupName('${group.id}', this)">${group.name || 'New Group'}</span>
+        <span class="remove-group" onclick="removeGroup(this)">×</span>
+      </div>
+      <ul class="note-comments">
+        ${commentsHtml}
+      </ul>
+    `;
+    
+    groupingArea.appendChild(groupElement);
+    
+    // Add drag event listeners to group comments
+    groupElement.querySelectorAll('li').forEach(li => {
+      li.addEventListener("dragstart", e => window.draggedEl = li);
+    });
+    
+    // Add group drag functionality
+    let isDragging = false;
+    let startX, startY;
+    
+    groupElement.addEventListener("mousedown", e => {
+      if (e.target.closest('.note-header')) {
+        isDragging = true;
+        startX = e.clientX - groupElement.offsetLeft;
+        startY = e.clientY - groupElement.offsetTop;
+        e.preventDefault();
+      }
+    });
+    
+    document.addEventListener("mousemove", e => {
+      if (isDragging) {
+        groupElement.style.left = (e.clientX - startX) + "px";
+        groupElement.style.top = (e.clientY - startY) + "px";
+      }
+    });
+    
+    document.addEventListener("mouseup", async () => {
+      if (isDragging) {
+        isDragging = false;
+        // Update group position in Firebase using simplified data model
+        try {
+          const slideId = `${courseId}_${presentationId}_${currentSlideIndex}`;
+          const groupRef = doc(db, 'slides', slideId, 'groups', group.id);
+          await updateDoc(groupRef, {
+            x: parseInt(groupElement.style.left, 10),
+            y: parseInt(groupElement.style.top, 10)
+          });
+          console.log('[LiveViewer] Group position updated');
+        } catch (error) {
+          console.error('[LiveViewer] Error updating group position:', error);
+        }
+      }
+    });
   };
 
   if (!presentationId) {

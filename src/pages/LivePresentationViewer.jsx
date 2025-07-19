@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import PresentationService from '../services/PresentationService';
 import { useAuth } from '../contexts/AuthContext';
-import { onSnapshot, doc, getDoc, where, collectionGroup, query, orderBy } from 'firebase/firestore';
+import { onSnapshot, doc, getDoc, collection, query, orderBy, addDoc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase/config';
 
 
@@ -47,19 +47,33 @@ const LivePresentationViewer = () => {
     }
   }, [currentUser, userProfile, presentation]);
 
-  // Listen to groups for the current slide
+  // Listen to groups for the current slide using simplified data model
   useEffect(() => {
     if (!courseId || !presentationId || slides.length === 0) return;
     const slideIndex = presentation?.currentSlideIndex || 0;
     setCurrentSlideIndex(slideIndex);
-    const unsub = PresentationService.listenToGroups(courseId, presentationId, slideIndex, (groups) => {
-      console.log('[LiveViewer] Groups updated:', groups);
-      setGroups(groups);
+    
+    console.log('[LiveViewer] Setting up groups listener for slide:', slideIndex);
+    
+    // Use the simplified data model: /slides/{slideId}/groups
+    const slideId = `${courseId}_${presentationId}_${slideIndex}`;
+    const groupsRef = collection(db, 'slides', slideId, 'groups');
+    
+    const unsub = onSnapshot(groupsRef, (snapshot) => {
+      const groupsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      console.log('[LiveViewer] Groups updated:', groupsData);
+      setGroups(groupsData);
+    }, (error) => {
+      console.error('[LiveViewer] Error listening to groups:', error);
     });
+    
     return () => unsub && unsub();
   }, [courseId, presentationId, presentation?.currentSlideIndex, slides.length]);
 
-  // Listen to comments for the current slide
+  // Listen to comments for the current slide using simplified data model
   useEffect(() => {
     if (!courseId || !presentationId || slides.length === 0) return;
     const slideIndex = presentation?.currentSlideIndex || 0;
@@ -67,14 +81,10 @@ const LivePresentationViewer = () => {
     
     console.log('[LiveViewer] Setting up comment listener for slide:', slideIndex);
     
-    // Listen to all comments for this slide across all users
-    const commentsQuery = query(
-      collectionGroup(db, 'comments'),
-      where('courseId', '==', courseId),
-      where('presentationId', '==', presentationId),
-      where('slideIndex', '==', slideIndex),
-      orderBy('timestamp', 'asc')
-    );
+    // Use the simplified data model: /slides/{slideId}/comments
+    const slideId = `${courseId}_${presentationId}_${slideIndex}`;
+    const commentsRef = collection(db, 'slides', slideId, 'comments');
+    const commentsQuery = query(commentsRef, orderBy('createdAt', 'asc'));
     
     const unsubscribeComments = onSnapshot(commentsQuery, (snapshot) => {
       const commentsData = snapshot.docs.map(doc => ({
@@ -694,6 +704,9 @@ const LivePresentationViewer = () => {
     window.removeGroup = removeGroup;
     window.selectAll = selectAll;
     window.handleGroupMouseDown = handleGroupMouseDown;
+    window.updateGroupName = updateGroupName;
+    window.updateCommentGroupId = updateCommentGroupId;
+    window.createGroup = createGroup;
 
     // Update slide display from React state
     function updateSlideDisplay() {
@@ -782,21 +795,22 @@ const LivePresentationViewer = () => {
     function renderComment(comment) {
       const el = document.createElement("div");
       el.className = "comment";
-      if (comment.grouped) el.classList.add("grouped");
+      // Use simplified data model: check if comment has groupId
+      if (comment.groupId) el.classList.add("grouped");
       el.draggable = true;
       el.dataset.type = "comment";
       el.dataset.id = comment.id;
       
       const hasReplies = comment.replies && comment.replies.length > 0;
       const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
-      const isLiked = userLikes.has(comment.id);
+      const isLiked = comment.likedBy && comment.likedBy.includes(currentUser?.uid || 'anonymous');
       const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
       
       el.innerHTML = `
         <div class="text">
           <div class="comment-text">${comment.text}</div>
           <div class="comment-actions">
-            <span class="${likeClass}" onclick="like('${comment.id}', this)">👍 ${comment.likes || 0}</span>
+            <span class="${likeClass}" onclick="like('${comment.id}', this)">👍 ${comment.likedBy ? comment.likedBy.length : 0}</span>
             <button class="reply-btn" onclick="reply(this)">Reply</button>
             <button class="remove-btn" onclick="removeComment('${comment.id}', this)">×</button>
             ${replyToggle}
@@ -828,26 +842,30 @@ const LivePresentationViewer = () => {
       const comment = comments.find(c => c.id === id);
       if (!comment) return;
       
-      const isLiked = userLikes.has(id);
-      if (isLiked) {
-        // Unlike
-        userLikes.delete(id);
-        comment.likes = Math.max(0, comment.likes - 1);
-        el.classList.remove('liked');
-      } else {
-        // Like
-        userLikes.add(id);
-        comment.likes++;
-        el.classList.add('liked');
-      }
+      const userId = currentUser?.uid || 'anonymous';
+      const likedBy = comment.likedBy || [];
+      const userIndex = likedBy.indexOf(userId);
       
-      // Update all instances of this comment (chat panel and groups)
-      updateCommentLikes(id, comment.likes);
-      updateAllGroupLikes();
-      
-      // Update likes in Firebase
       try {
-        await PresentationService.updateCommentLikes(courseId, presentationId, currentSlideIndex, id, comment.likes);
+        // Use simplified data model: /slides/{slideId}/comments
+        const slideId = `${courseId}_${presentationId}_${currentSlideIndex}`;
+        const commentRef = doc(db, 'slides', slideId, 'comments', id);
+        
+        if (userIndex > -1) {
+          // Unlike
+          likedBy.splice(userIndex, 1);
+          el.classList.remove('liked');
+        } else {
+          // Like
+          likedBy.push(userId);
+          el.classList.add('liked');
+        }
+        
+        await updateDoc(commentRef, { likedBy });
+        el.textContent = `👍 ${likedBy.length}`;
+        
+        // Update all instances of this comment (chat panel and groups)
+        updateCommentLikes(id, likedBy.length, userIndex > -1 ? false : true);
       } catch (error) {
         console.error('[LiveViewer] Error updating comment likes:', error);
       }
@@ -893,9 +911,12 @@ const LivePresentationViewer = () => {
       const comment = el.closest('.comment');
       comment.remove();
       
-      // Remove from Firebase
+      // Remove from Firebase using simplified data model
       try {
-        await PresentationService.removeComment(courseId, presentationId, currentSlideIndex, commentId);
+        const slideId = `${courseId}_${presentationId}_${currentSlideIndex}`;
+        const commentRef = doc(db, 'slides', slideId, 'comments', commentId);
+        await deleteDoc(commentRef);
+        console.log('[LiveViewer] Comment deleted:', commentId);
       } catch (error) {
         console.error('[LiveViewer] Error removing comment from Firebase:', error);
       }
@@ -907,20 +928,26 @@ const LivePresentationViewer = () => {
       
       console.log('[LiveViewer] addComment called, panel state before:', window.isDiscussionOpen);
       
-      const commentData = {
-        text: val,
-        username: userId || 'Anonymous',
-        userId: currentUser?.uid || 'anonymous',
-        likes: 0,
-        replies: [],
-        replyLikes: [],
-        timestamp: new Date()
-      };
-      
       try {
-        // Add to Firebase using the correct method
-        await PresentationService.addStudentComment(courseId, presentationId, currentSlideIndex, commentData);
+        // Use simplified data model: /slides/{slideId}/comments
+        const slideId = `${courseId}_${presentationId}_${currentSlideIndex}`;
+        const commentsRef = collection(db, 'slides', slideId, 'comments');
+        
+        await addDoc(commentsRef, {
+          text: val,
+          username: userId || 'Anonymous',
+          userId: currentUser?.uid || 'anonymous',
+          likes: 0,
+          likedBy: [],
+          replies: [],
+          replyLikes: [],
+          createdAt: serverTimestamp()
+        });
+        
         console.log('[LiveViewer] Comment added to Firebase');
+        
+        // Auto-focus back to input after sending
+        document.getElementById("chatText").focus();
       } catch (error) {
         console.error('[LiveViewer] Error adding comment to Firebase:', error);
       }
@@ -968,7 +995,7 @@ const LivePresentationViewer = () => {
       groupingArea.addEventListener("dragover", e => e.preventDefault());
     }
 
-    slide.addEventListener("drop", e => {
+    slide.addEventListener("drop", async e => {
       e.preventDefault();
       if (!draggedEl) return;
 
@@ -1088,18 +1115,22 @@ const LivePresentationViewer = () => {
           isDragging = false;
         });
 
-        // Persist group creation with error handling
-        const groupObj = {
-          id: groupId,
-          label: 'New Group',
-          commentIds: [id],
+        // Persist group creation using simplified data model
+        const groupData = {
+          name: 'New Group',
           x: parseInt(group.style.left, 10),
-          y: parseInt(group.style.top, 10)
+          y: parseInt(group.style.top, 10),
+          createdAt: serverTimestamp()
         };
-        console.log('[DEBUG] Creating group (drop):', { courseId, presentationId, currentSlideIndex, groupObj });
-        PresentationService.setGroup(courseId, presentationId, currentSlideIndex, groupObj)
-          .then(() => console.log('[DEBUG] Group created successfully (drop)'))
-          .catch(err => console.error('[DEBUG] Group creation failed (drop):', err));
+        
+        try {
+          const newGroupId = await createGroup(groupData);
+          // Update the comment's groupId
+          await updateCommentGroupId(id, newGroupId);
+          console.log('[LiveViewer] Group created and comment assigned:', newGroupId);
+        } catch (error) {
+          console.error('[LiveViewer] Error creating group:', error);
+        }
       }
     });
 
@@ -1217,17 +1248,19 @@ const LivePresentationViewer = () => {
       });
     }
 
-    function removeFromGroup(commentId, el) {
+    async function removeFromGroup(commentId, el) {
       const li = el.closest('li');
       const group = li.closest('.note-box');
       
       // Remove from group
       li.remove();
       
-      // Update comment state
-      const comment = comments.find(c => c.id === commentId);
-      if (comment) {
-        comment.grouped = false;
+      // Update comment state using simplified data model
+      try {
+        await updateCommentGroupId(commentId, null);
+        console.log('[LiveViewer] Comment removed from group:', commentId);
+      } catch (error) {
+        console.error('[LiveViewer] Error removing comment from group:', error);
       }
       
       // Update chat panel - remove grouped class from original comment
@@ -1236,34 +1269,22 @@ const LivePresentationViewer = () => {
       if (existing) {
         existing.classList.remove("grouped");
       }
-      
-      updateGroupLikes(group);
-      updateGroupReplies(commentId);
-
-      // Persist group update
-      const groupObj = {
-        id: group.dataset.groupId, // Use existing groupId
-        label: group.querySelector('.note-header span[contenteditable]').innerText, // Get new label
-        commentIds: Array.from(group.querySelectorAll('li[data-id]')).map(li => li.dataset.id),
-        x: parseInt(group.style.left, 10),
-        y: parseInt(group.style.top, 10)
-      };
-      PresentationService.setGroup(courseId, presentationId, currentSlideIndex, groupObj);
     }
 
-    function removeGroup(el) {
+    async function removeGroup(el) {
       const group = el.closest('.note-box');
-      const groupId = group.dataset.groupId; // Assuming group has a data-groupId attribute
+      const groupId = group.dataset.groupId;
       const groupComments = group.querySelectorAll('li[data-id]');
       
-      // Remove grouped state from all comments
-      groupComments.forEach(li => {
+      // Remove grouped state from all comments using simplified data model
+      for (const li of groupComments) {
         const commentId = li.dataset.id;
-        const comment = comments.find(c => c.id === commentId);
-        if (comment) {
-          comment.grouped = false;
+        try {
+          await updateCommentGroupId(commentId, null);
+        } catch (error) {
+          console.error('[LiveViewer] Error removing comment from group:', error);
         }
-      });
+      }
       
       // Remove group
       group.remove();
@@ -1278,9 +1299,16 @@ const LivePresentationViewer = () => {
         }
       });
 
-      // Delete the group from Firestore
+      // Delete the group from Firestore using simplified data model
       if (groupId) {
-        PresentationService.deleteGroup(courseId, presentationId, currentSlideIndex, groupId);
+        try {
+          const slideId = `${courseId}_${presentationId}_${currentSlideIndex}`;
+          const groupRef = doc(db, 'slides', slideId, 'groups', groupId);
+          await deleteDoc(groupRef);
+          console.log('[LiveViewer] Group deleted:', groupId);
+        } catch (error) {
+          console.error('[LiveViewer] Error deleting group:', error);
+        }
       }
     }
 
@@ -1309,8 +1337,23 @@ const LivePresentationViewer = () => {
         }
       };
       
-      const handleMouseUp = () => {
-        isDragging = false;
+      const handleMouseUp = async () => {
+        if (isDragging) {
+          isDragging = false;
+          // Update group position in Firebase using simplified data model
+          try {
+            const groupId = group.dataset.groupId;
+            const slideId = `${courseId}_${presentationId}_${currentSlideIndex}`;
+            const groupRef = doc(db, 'slides', slideId, 'groups', groupId);
+            await updateDoc(groupRef, {
+              x: parseInt(group.style.left, 10),
+              y: parseInt(group.style.top, 10)
+            });
+            console.log('[LiveViewer] Group position updated via drag');
+          } catch (error) {
+            console.error('[LiveViewer] Error updating group position:', error);
+          }
+        }
         document.removeEventListener('mousemove', handleMouseMove);
         document.removeEventListener('mouseup', handleMouseUp);
       };
@@ -1321,6 +1364,46 @@ const LivePresentationViewer = () => {
       
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
+    }
+
+    async function updateGroupName(groupId, element) {
+      const newName = element.textContent.trim();
+      if (!newName) {
+        element.textContent = 'New Group';
+        return;
+      }
+      
+      try {
+        const slideId = `${courseId}_${presentationId}_${currentSlideIndex}`;
+        const groupRef = doc(db, 'slides', slideId, 'groups', groupId);
+        await updateDoc(groupRef, { name: newName });
+        console.log('[LiveViewer] Group name updated:', newName);
+      } catch (error) {
+        console.error('[LiveViewer] Error updating group name:', error);
+      }
+    }
+
+    async function updateCommentGroupId(commentId, groupId) {
+      try {
+        const slideId = `${courseId}_${presentationId}_${currentSlideIndex}`;
+        const commentRef = doc(db, 'slides', slideId, 'comments', commentId);
+        await updateDoc(commentRef, { groupId });
+        console.log('[LiveViewer] Comment group updated:', commentId, '->', groupId);
+      } catch (error) {
+        console.error('[LiveViewer] Error updating comment group:', error);
+      }
+    }
+
+    async function createGroup(groupData) {
+      try {
+        const slideId = `${courseId}_${presentationId}_${currentSlideIndex}`;
+        const groupsRef = collection(db, 'slides', slideId, 'groups');
+        const docRef = await addDoc(groupsRef, groupData);
+        console.log('[LiveViewer] Group created:', docRef.id);
+        return docRef.id;
+      } catch (error) {
+        console.error('[LiveViewer] Error creating group:', error);
+      }
     }
 
     function updateGroupReplies(id) {
@@ -1355,12 +1438,12 @@ const LivePresentationViewer = () => {
       document.querySelectorAll('.note-box').forEach(updateGroupLikes);
     }
 
-    function updateCommentLikes(commentId, likeCount) {
+    function updateCommentLikes(commentId, likeCount, isLiked) {
       // Update like count in chat panel
       const chatComment = document.querySelector(`.comment[data-id='${commentId}'] .like-btn`);
       if (chatComment) {
         chatComment.innerText = `👍 ${likeCount}`;
-        if (userLikes.has(commentId)) {
+        if (isLiked) {
           chatComment.classList.add('liked');
         } else {
           chatComment.classList.remove('liked');
@@ -1371,7 +1454,7 @@ const LivePresentationViewer = () => {
       const groupComments = document.querySelectorAll(`.note-box li[data-id='${commentId}'] .like-btn`);
       groupComments.forEach(likeBtn => {
         likeBtn.innerText = `👍 ${likeCount}`;
-        if (userLikes.has(commentId)) {
+        if (isLiked) {
           likeBtn.classList.add('liked');
         } else {
           likeBtn.classList.remove('liked');
@@ -1490,28 +1573,37 @@ const LivePresentationViewer = () => {
       });
     }
 
-    // Render groups from Firebase
+    // Render groups from Firebase using simplified data model
     console.log('[LiveViewer] Checking groups for rendering:', { groupingArea: !!groupingArea, groupsLength: groups.length, groups });
     if (groupingArea && groups.length > 0) {
       console.log('[LiveViewer] Rendering groups:', groups);
-      groupingArea.innerHTML = ''; // Clear existing groups
+      // DON'T clear existing groups to maintain persistence
+      // groupingArea.innerHTML = ''; // Removed to maintain persistence
       
       groups.forEach(group => {
+        // Check if group already exists to avoid duplicates
+        const existingGroup = groupingArea.querySelector(`[data-group-id="${group.id}"]`);
+        if (existingGroup) {
+          console.log('[LiveViewer] Group already exists, updating position:', group.id);
+          existingGroup.style.left = group.x + "px";
+          existingGroup.style.top = group.y + "px";
+          return;
+        }
+        
         const groupElement = document.createElement("div");
         groupElement.className = "note-box";
         groupElement.dataset.groupId = group.id;
         groupElement.style.left = group.x + "px";
         groupElement.style.top = group.y + "px";
         
-        // Get comments for this group
-        const groupComments = group.commentIds.map(commentId => 
-          comments.find(c => c.id === commentId)
-        ).filter(Boolean);
+        // Get comments for this group using simplified data model
+        // Comments store groupId, so filter comments by groupId
+        const groupComments = comments.filter(comment => comment.groupId === group.id);
         
         const commentsHtml = groupComments.map(comment => {
           const hasReplies = comment.replies && comment.replies.length > 0;
           const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
-          const isLiked = userLikes.has(comment.id);
+          const isLiked = comment.likedBy && comment.likedBy.includes(currentUser?.uid || 'anonymous');
           const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
           
           return `
@@ -1519,7 +1611,7 @@ const LivePresentationViewer = () => {
               <div class="comment-content">
                 <div class="comment-text">${comment.text}</div>
                 <div class="comment-actions">
-                  <span class="${likeClass}" onclick="like('${comment.id}', this)">👍 ${comment.likes || 0}</span>
+                  <span class="${likeClass}" onclick="like('${comment.id}', this)">👍 ${comment.likedBy ? comment.likedBy.length : 0}</span>
                   <button class="reply-btn" title="Reply" onclick="reply(this)">🗨️</button>
                   <span class="remove-comment" onclick="removeFromGroup('${comment.id}', this)">×</span>
                   ${replyToggle}
@@ -1531,7 +1623,7 @@ const LivePresentationViewer = () => {
         
         groupElement.innerHTML = `
           <div class="note-header" onmousedown="handleGroupMouseDown(event, this.closest('.note-box'))">
-            <span contenteditable onclick="selectAll(this)">${group.label || 'New Group'}</span>
+            <span contenteditable onclick="selectAll(this)" onblur="updateGroupName('${group.id}', this)">${group.name || 'New Group'}</span>
             <span class="remove-group" onclick="removeGroup(this)">×</span>
           </div>
           <ul class="note-comments">
@@ -1566,18 +1658,21 @@ const LivePresentationViewer = () => {
           }
         });
         
-        document.addEventListener("mouseup", () => {
+        document.addEventListener("mouseup", async () => {
           if (isDragging) {
             isDragging = false;
-            // Update group position in Firebase
-            const updatedGroup = {
-              ...group,
-              x: parseInt(groupElement.style.left, 10),
-              y: parseInt(groupElement.style.top, 10)
-            };
-            PresentationService.setGroup(courseId, presentationId, currentSlideIndex, updatedGroup)
-              .then(() => console.log('[LiveViewer] Group position updated'))
-              .catch(err => console.error('[LiveViewer] Error updating group position:', err));
+            // Update group position in Firebase using simplified data model
+            try {
+              const slideId = `${courseId}_${presentationId}_${currentSlideIndex}`;
+              const groupRef = doc(db, 'slides', slideId, 'groups', group.id);
+              await updateDoc(groupRef, {
+                x: parseInt(groupElement.style.left, 10),
+                y: parseInt(groupElement.style.top, 10)
+              });
+              console.log('[LiveViewer] Group position updated');
+            } catch (error) {
+              console.error('[LiveViewer] Error updating group position:', error);
+            }
           }
         });
       });

@@ -1,4 +1,4 @@
-import { collection, addDoc, getDocs, query, orderBy, serverTimestamp, doc, deleteDoc, updateDoc, getDoc, setDoc, where, onSnapshot } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, orderBy, serverTimestamp, doc, deleteDoc, updateDoc, getDoc, setDoc, where, onSnapshot, collectionGroup } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { getAuth } from 'firebase/auth';
 
@@ -385,6 +385,7 @@ class PresentationService {
         timestamp: serverTimestamp(),
         courseId, // Ensure these fields are present for collectionGroup rules
         presentationId,
+        groupId: commentData.groupId || null, // Support for new data model
       };
       const docRef = await addDoc(commentsCol, newComment);
       console.log('[PresentationService] Student comment added to subcollection:', { courseId, presentationId, slideIndex, userId, newComment, commentId: docRef.id });
@@ -463,11 +464,26 @@ class PresentationService {
     });
   }
 
-  // Add or update a group (by id)
+  // Add or update a group (by id) - Updated for simplified data model
   async setGroup(courseId, presentationId, slideIndex, group) {
     const groupsCol = collection(db, 'courses', courseId, 'presentations', presentationId, 'slides', String(slideIndex), 'groups');
     const groupDoc = doc(groupsCol, group.id);
-    await setDoc(groupDoc, group, { merge: true });
+    
+    // Transform group data to match new simplified model
+    const groupData = {
+      name: group.name || group.label || 'New Group',
+      x: group.x || 0,
+      y: group.y || 0,
+      updatedAt: serverTimestamp()
+    };
+    
+    // Add createdAt only if this is a new group
+    const existingGroup = await getDoc(groupDoc);
+    if (!existingGroup.exists()) {
+      groupData.createdAt = serverTimestamp();
+    }
+    
+    await setDoc(groupDoc, groupData, { merge: true });
   }
 
   // Delete a group
@@ -479,43 +495,203 @@ class PresentationService {
 
 
 
-  // Update comment likes
+  // Update comment likes - Updated for collectionGroup structure
   async updateCommentLikes(courseId, presentationId, slideIndex, commentId, likeCount) {
     try {
       console.log('[PresentationService] Updating comment likes:', { courseId, presentationId, slideIndex, commentId, likeCount });
-      const commentDoc = doc(db, 'courses', courseId, 'presentations', presentationId, 'comments', commentId);
-      await updateDoc(commentDoc, { likes: likeCount });
-      console.log('[PresentationService] Comment likes updated successfully');
+      
+      // Find the comment in the collectionGroup and update it
+      const commentsQuery = query(
+        collectionGroup(db, 'comments'),
+        where('courseId', '==', courseId),
+        where('presentationId', '==', presentationId)
+      );
+      
+      const snapshot = await getDocs(commentsQuery);
+      const commentDoc = snapshot.docs.find(doc => doc.id === commentId);
+      
+      if (commentDoc) {
+        await updateDoc(commentDoc.ref, { likes: likeCount });
+        console.log('[PresentationService] Comment likes updated successfully');
+      } else {
+        throw new Error('Comment not found');
+      }
     } catch (err) {
       console.error('[PresentationService] Error updating comment likes:', err);
       throw err;
     }
   }
 
-  // Update comment replies
+  // Update comment replies - Updated for collectionGroup structure
   async updateCommentReplies(courseId, presentationId, slideIndex, commentId, replies, replyLikes) {
     try {
       console.log('[PresentationService] Updating comment replies:', { courseId, presentationId, slideIndex, commentId, replies, replyLikes });
-      const commentDoc = doc(db, 'courses', courseId, 'presentations', presentationId, 'comments', commentId);
-      await updateDoc(commentDoc, { replies, replyLikes });
-      console.log('[PresentationService] Comment replies updated successfully');
+      
+      // Find the comment in the collectionGroup and update it
+      const commentsQuery = query(
+        collectionGroup(db, 'comments'),
+        where('courseId', '==', courseId),
+        where('presentationId', '==', presentationId)
+      );
+      
+      const snapshot = await getDocs(commentsQuery);
+      const commentDoc = snapshot.docs.find(doc => doc.id === commentId);
+      
+      if (commentDoc) {
+        await updateDoc(commentDoc.ref, { replies, replyLikes });
+        console.log('[PresentationService] Comment replies updated successfully');
+      } else {
+        throw new Error('Comment not found');
+      }
     } catch (err) {
       console.error('[PresentationService] Error updating comment replies:', err);
       throw err;
     }
   }
 
-  // Remove comment
+  // Remove comment - Updated for collectionGroup structure
   async removeComment(courseId, presentationId, slideIndex, commentId) {
     try {
       console.log('[PresentationService] Removing comment:', { courseId, presentationId, slideIndex, commentId });
-      const commentDoc = doc(db, 'courses', courseId, 'presentations', presentationId, 'comments', commentId);
-      await deleteDoc(commentDoc);
-      console.log('[PresentationService] Comment removed successfully');
+      
+      // Find the comment in the collectionGroup and delete it
+      const commentsQuery = query(
+        collectionGroup(db, 'comments'),
+        where('courseId', '==', courseId),
+        where('presentationId', '==', presentationId)
+      );
+      
+      const snapshot = await getDocs(commentsQuery);
+      const commentDoc = snapshot.docs.find(doc => doc.id === commentId);
+      
+      if (commentDoc) {
+        await deleteDoc(commentDoc.ref);
+        console.log('[PresentationService] Comment removed successfully');
+      } else {
+        throw new Error('Comment not found');
+      }
     } catch (err) {
       console.error('[PresentationService] Error removing comment:', err);
       throw err;
     }
+  }
+
+  // NEW METHODS FOR SIMPLIFIED DATA MODEL
+
+  // Update comment's groupId (for drag-and-drop functionality)
+  async updateCommentGroupId(courseId, presentationId, commentId, groupId) {
+    try {
+      console.log('[PresentationService] Updating comment groupId:', { courseId, presentationId, commentId, groupId });
+      
+      // Find the comment in the collectionGroup and update it
+      const commentsQuery = query(
+        collectionGroup(db, 'comments'),
+        where('courseId', '==', courseId),
+        where('presentationId', '==', presentationId)
+      );
+      
+      const snapshot = await getDocs(commentsQuery);
+      const commentDoc = snapshot.docs.find(doc => doc.id === commentId);
+      
+      if (commentDoc) {
+        await updateDoc(commentDoc.ref, { groupId: groupId || null });
+        console.log('[PresentationService] Comment groupId updated successfully');
+      } else {
+        throw new Error('Comment not found');
+      }
+    } catch (err) {
+      console.error('[PresentationService] Error updating comment groupId:', err);
+      throw err;
+    }
+  }
+
+  // Create a simplified group (only x, y, name)
+  async createSimplifiedGroup(courseId, presentationId, slideIndex, groupData) {
+    try {
+      console.log('[PresentationService] Creating simplified group:', { courseId, presentationId, slideIndex, groupData });
+      
+      const groupsCol = collection(db, 'courses', courseId, 'presentations', presentationId, 'slides', String(slideIndex), 'groups');
+      const groupId = groupData.id || `group_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
+      const newGroup = {
+        name: groupData.name || groupData.label || 'New Group',
+        x: groupData.x || 0,
+        y: groupData.y || 0,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      };
+      
+      const groupDoc = doc(groupsCol, groupId);
+      await setDoc(groupDoc, newGroup);
+      
+      console.log('[PresentationService] Simplified group created successfully:', groupId);
+      return { id: groupId, ...newGroup };
+    } catch (err) {
+      console.error('[PresentationService] Error creating simplified group:', err);
+      throw err;
+    }
+  }
+
+  // Update group position (x, y coordinates)
+  async updateGroupPosition(courseId, presentationId, slideIndex, groupId, x, y) {
+    try {
+      console.log('[PresentationService] Updating group position:', { courseId, presentationId, slideIndex, groupId, x, y });
+      
+      const groupsCol = collection(db, 'courses', courseId, 'presentations', presentationId, 'slides', String(slideIndex), 'groups');
+      const groupDoc = doc(groupsCol, groupId);
+      
+      await updateDoc(groupDoc, { 
+        x: x, 
+        y: y, 
+        updatedAt: serverTimestamp() 
+      });
+      
+      console.log('[PresentationService] Group position updated successfully');
+    } catch (err) {
+      console.error('[PresentationService] Error updating group position:', err);
+      throw err;
+    }
+  }
+
+  // Update group name
+  async updateGroupName(courseId, presentationId, slideIndex, groupId, name) {
+    try {
+      console.log('[PresentationService] Updating group name:', { courseId, presentationId, slideIndex, groupId, name });
+      
+      const groupsCol = collection(db, 'courses', courseId, 'presentations', presentationId, 'slides', String(slideIndex), 'groups');
+      const groupDoc = doc(groupsCol, groupId);
+      
+      await updateDoc(groupDoc, { 
+        name: name, 
+        updatedAt: serverTimestamp() 
+      });
+      
+      console.log('[PresentationService] Group name updated successfully');
+    } catch (err) {
+      console.error('[PresentationService] Error updating group name:', err);
+      throw err;
+    }
+  }
+
+  // Listen to comments with groupId filtering
+  listenToCommentsWithGroups(courseId, presentationId, slideIndex, callback) {
+    const commentsQuery = query(
+      collectionGroup(db, 'comments'),
+      where('courseId', '==', courseId),
+      where('presentationId', '==', presentationId),
+      where('slideIndex', '==', slideIndex),
+      orderBy('timestamp', 'asc')
+    );
+    
+    return onSnapshot(commentsQuery, (snapshot) => {
+      const comments = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      callback(comments);
+    }, (error) => {
+      console.error('[PresentationService] Error listening to comments:', error);
+    });
   }
 }
 

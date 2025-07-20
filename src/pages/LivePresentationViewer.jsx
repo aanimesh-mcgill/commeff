@@ -722,6 +722,8 @@ const LivePresentationViewer = () => {
     window.updateGroupName = updateGroupName;
     window.updateCommentGroupId = updateCommentGroupId;
     window.createGroup = createGroup;
+    window.updateSlideDisplay = updateSlideDisplay;
+    window.renderComment = renderComment;
 
     // Update slide display from React state
     function updateSlideDisplay() {
@@ -1034,7 +1036,7 @@ const LivePresentationViewer = () => {
         li.draggable = true;
         li.dataset.id = id;
         li.dataset.type = "comment";
-        li.addEventListener("dragstart", e => draggedEl = li);
+        li.addEventListener("dragstart", e => window.draggedEl = li);
         
         const hasReplies = comment.replies.length > 0;
         const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
@@ -1100,12 +1102,12 @@ const LivePresentationViewer = () => {
           slide.appendChild(group);
         }
         // Don't remove the original comment, just mark it as grouped
-        draggedEl.classList.add('grouped');
+        window.draggedEl.classList.add('grouped');
         comment.grouped = true;
         
         // Add drag event listeners
         const li = group.querySelector("li");
-        li.addEventListener("dragstart", e => draggedEl = li);
+        li.addEventListener("dragstart", e => window.draggedEl = li);
         
         // Add group drag functionality
         let isDragging = false;
@@ -1182,7 +1184,7 @@ const LivePresentationViewer = () => {
           li.draggable = true;
           li.dataset.id = id;
           li.dataset.type = "comment";
-          li.addEventListener("dragstart", e => draggedEl = li);
+          li.addEventListener("dragstart", e => window.draggedEl = li);
           
           const hasReplies = comment.replies.length > 0;
           const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
@@ -1247,9 +1249,9 @@ const LivePresentationViewer = () => {
         window.draggedEl.classList.add('grouped');
         comment.grouped = true;
           
-          // Add drag event listeners
-          const li = group.querySelector("li");
-          li.addEventListener("dragstart", e => draggedEl = li);
+                  // Add drag event listeners
+        const li = group.querySelector("li");
+        li.addEventListener("dragstart", e => window.draggedEl = li);
 
           // Persist group creation
           const groupObj = {
@@ -1652,7 +1654,7 @@ const LivePresentationViewer = () => {
         
         // Add drag event listeners to group comments
         groupElement.querySelectorAll('li').forEach(li => {
-          li.addEventListener("dragstart", e => draggedEl = li);
+          li.addEventListener("dragstart", e => window.draggedEl = li);
         });
         
         // Add group drag functionality
@@ -1702,8 +1704,10 @@ const LivePresentationViewer = () => {
   const updateContentOnly = () => {
     console.log('[LiveViewer] updateContentOnly called - updating content without re-initializing');
     
-    // Update slide display
-    updateSlideDisplay();
+    // Update slide display - call the function from initVanillaJS scope
+    if (window.updateSlideDisplay) {
+      window.updateSlideDisplay();
+    }
     
     // Update comments in chat panel without clearing groups
     const commentList = document.getElementById('commentList');
@@ -1711,7 +1715,7 @@ const LivePresentationViewer = () => {
       console.log('[LiveViewer] Updating comments in chat panel');
       commentList.innerHTML = ''; // Only clear comments, not groups
       comments.forEach(comment => {
-        const el = renderComment(comment);
+        const el = window.renderComment ? window.renderComment(comment) : renderCommentFallback(comment);
         commentList.appendChild(el);
       });
     }
@@ -1862,6 +1866,37 @@ const LivePresentationViewer = () => {
         }
       }
     });
+  };
+
+  const renderCommentFallback = (comment) => {
+    const el = document.createElement("div");
+    el.className = "comment";
+    // Use simplified data model: check if comment has groupId
+    if (comment.groupId) el.classList.add("grouped");
+    el.draggable = true;
+    el.dataset.type = "comment";
+    el.dataset.id = comment.id;
+    
+    const hasReplies = comment.replies && comment.replies.length > 0;
+    const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
+    const isLiked = comment.likedBy && comment.likedBy.includes(currentUser?.uid || 'anonymous');
+    const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
+    const likeCount = comment.likedBy && Array.isArray(comment.likedBy) ? comment.likedBy.length : 0;
+    
+    el.innerHTML = `
+      <div class="text">
+        <div class="comment-text">${comment.text}</div>
+        <div class="comment-actions">
+          <span class="${likeClass}" onclick="like('${comment.id}', this)">👍 ${likeCount}</span>
+          <button class="reply-btn" onclick="reply(this)">Reply</button>
+          <button class="remove-btn" onclick="removeComment('${comment.id}', this)">×</button>
+          ${replyToggle}
+        </div>
+      </div>
+    `;
+    
+    el.addEventListener("dragstart", e => window.draggedEl = el);
+    return el;
   };
 
   if (!presentationId) {

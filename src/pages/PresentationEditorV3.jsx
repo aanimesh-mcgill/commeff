@@ -750,15 +750,15 @@ export default function PresentationEditorV3({ courseId, presentationId = 'demo-
       <div className="flex-1 flex">
         {/* Sidebar */}
         <div className="h-full overflow-y-auto" style={{ maxHeight: 'calc(100vh - 64px)', minWidth: 120 }}>
-          <SlidesSidebar
+        <SlidesSidebar
             slides={safeSlides}
             currentSlideIndex={presentation.currentSlideIndex || 0}
-            onSlideSelect={handleSlideSelect}
-            onAddSlide={handleAddSlide}
-            onDuplicateSlide={handleDuplicateSlide}
-            onDeleteSlide={handleDeleteSlide}
-            onAddSlideAfter={handleAddSlideAfter}
-          />
+          onSlideSelect={handleSlideSelect}
+          onAddSlide={handleAddSlide}
+          onDuplicateSlide={handleDuplicateSlide}
+          onDeleteSlide={handleDeleteSlide}
+          onAddSlideAfter={handleAddSlideAfter}
+        />
         </div>
         {/* Canvas */}
         <SlideCanvas

@@ -604,11 +604,11 @@ const CourseHome = () => {
                           if (canView) navigate(`/course/${courseId}/presentation/${p.id}/edit`);
                         }}
                       >
-                        <td className="px-4 py-2 border-b">{idx + 1}</td>
-                        <td className="px-4 py-2 border-b">{p.title}</td>
-                        <td className="px-4 py-2 border-b">{p.slideCount || 0}</td>
-                        <td className="px-4 py-2 border-b">{p.createdAt && p.createdAt.toDate ? p.createdAt.toDate().toLocaleDateString() : ''}</td>
-                        <td className="px-4 py-2 border-b">
+                      <td className="px-4 py-2 border-b">{idx + 1}</td>
+                      <td className="px-4 py-2 border-b">{p.title}</td>
+                      <td className="px-4 py-2 border-b">{p.slideCount || 0}</td>
+                      <td className="px-4 py-2 border-b">{p.createdAt && p.createdAt.toDate ? p.createdAt.toDate().toLocaleDateString() : ''}</td>
+                      <td className="px-4 py-2 border-b">
                           {isInstructor ? (
                             <>
                               <button
@@ -618,19 +618,19 @@ const CourseHome = () => {
                               >
                                 {isLive ? 'Live' : 'Go Live'}
                               </button>
-                              <button
-                                className="text-red-600 hover:text-red-800"
-                                title="Delete presentation"
-                                onClick={e => { e.stopPropagation(); handleDeletePresentation(p.id); }}
-                              >
-                                <Trash2 className="h-5 w-5" />
-                              </button>
+                        <button
+                          className="text-red-600 hover:text-red-800"
+                          title="Delete presentation"
+                          onClick={e => { e.stopPropagation(); handleDeletePresentation(p.id); }}
+                        >
+                          <Trash2 className="h-5 w-5" />
+                        </button>
                             </>
                           ) : (
                             <span className="text-xs text-gray-400">View only</span>
                           )}
-                        </td>
-                      </tr>
+                      </td>
+                    </tr>
                     );
                   })
                 )}

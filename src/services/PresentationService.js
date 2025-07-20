@@ -1,4 +1,4 @@
-import { collection, addDoc, getDocs, query, orderBy, serverTimestamp, doc, deleteDoc, updateDoc, getDoc, setDoc, where, onSnapshot } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, orderBy, serverTimestamp, doc, deleteDoc, updateDoc, getDoc, setDoc, where, onSnapshot, collectionGroup } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { getAuth } from 'firebase/auth';
 
@@ -386,7 +386,10 @@ class PresentationService {
         courseId, // Ensure these fields are present for collectionGroup rules
         presentationId,
       };
+      
+      console.log('🔥 [FIRESTORE WRITE] Adding comment to Firestore:', JSON.stringify(newComment, null, 2));
       const docRef = await addDoc(commentsCol, newComment);
+      console.log('✅ [FIRESTORE WRITE] Comment added successfully with ID:', docRef.id);
       console.log('[PresentationService] Student comment added to subcollection:', { courseId, presentationId, slideIndex, userId, newComment, commentId: docRef.id });
       // DEBUG: Log all comments for this slideIndex
       const q = query(commentsCol, where('slideIndex', '==', Number(slideIndex)));
@@ -418,7 +421,9 @@ class PresentationService {
         timestamp: serverTimestamp(),
       };
       data.slides[slideIndex].groups.push(newGroup);
+      console.log('🔥 [FIRESTORE WRITE] Adding group to Firestore:', JSON.stringify(data, null, 2));
       await setDoc(responseDocRef, data);
+      console.log('✅ [FIRESTORE WRITE] Group added successfully');
       console.log('[PresentationService] Student group added:', { courseId, presentationId, slideIndex, userId, newGroup });
       return newGroup;
     } catch (err) {
@@ -457,8 +462,10 @@ class PresentationService {
   // Get groups for a slide (real-time listener)
   listenToGroups(courseId, presentationId, slideIndex, callback) {
     const groupsCol = collection(db, 'courses', courseId, 'presentations', presentationId, 'slides', String(slideIndex), 'groups');
+    console.log('👂 [FIRESTORE LISTENER] Setting up real-time listener for groups:', { courseId, presentationId, slideIndex });
     return onSnapshot(groupsCol, (snapshot) => {
       const groups = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      console.log('📖 [FIRESTORE READ] Groups data from real-time listener:', JSON.stringify(groups, null, 2));
       callback(groups);
     });
   }
@@ -467,25 +474,100 @@ class PresentationService {
   async setGroup(courseId, presentationId, slideIndex, group) {
     const groupsCol = collection(db, 'courses', courseId, 'presentations', presentationId, 'slides', String(slideIndex), 'groups');
     const groupDoc = doc(groupsCol, group.id);
+    console.log('🔥 [FIRESTORE WRITE] Setting group in Firestore:', JSON.stringify(group, null, 2));
     await setDoc(groupDoc, group, { merge: true });
+    console.log('✅ [FIRESTORE WRITE] Group set successfully with ID:', group.id);
   }
 
   // Delete a group
   async deleteGroup(courseId, presentationId, slideIndex, groupId) {
     const groupsCol = collection(db, 'courses', courseId, 'presentations', presentationId, 'slides', String(slideIndex), 'groups');
     const groupDoc = doc(groupsCol, groupId);
+    console.log('🗑️ [FIRESTORE DELETE] Deleting group from Firestore:', { courseId, presentationId, slideIndex, groupId });
     await deleteDoc(groupDoc);
+    console.log('✅ [FIRESTORE DELETE] Group deleted successfully');
   }
 
 
 
-  // Update comment likes
+  // Toggle user like for a comment
+  async toggleUserLike(courseId, presentationId, slideIndex, commentId, userId) {
+    try {
+      console.log('[PresentationService] Toggling user like:', { courseId, presentationId, slideIndex, commentId, userId });
+      
+      // Find the comment
+      const commentsQuery = query(
+        collectionGroup(db, 'comments'),
+        where('courseId', '==', courseId),
+        where('presentationId', '==', presentationId),
+        where('slideIndex', '==', slideIndex)
+      );
+      
+      const snapshot = await getDocs(commentsQuery);
+      const commentDoc = snapshot.docs.find(doc => doc.id === commentId);
+      
+      if (!commentDoc) {
+        throw new Error('Comment not found');
+      }
+      
+      const commentData = commentDoc.data();
+      console.log('📖 [FIRESTORE READ] Current comment data:', JSON.stringify(commentData, null, 2));
+      
+      const currentLikes = commentData.likes || 0;
+      const likedBy = commentData.likedBy || [];
+      
+      let newLikes = currentLikes;
+      let newLikedBy = [...likedBy];
+      
+      if (likedBy.includes(userId)) {
+        // Unlike: remove user from likedBy and decrease count
+        newLikedBy = likedBy.filter(id => id !== userId);
+        newLikes = Math.max(0, currentLikes - 1);
+      } else {
+        // Like: add user to likedBy and increase count
+        newLikedBy.push(userId);
+        newLikes = currentLikes + 1;
+      }
+      
+      const updateData = { likes: newLikes, likedBy: newLikedBy };
+      console.log('🔥 [FIRESTORE WRITE] Updating comment likes in Firestore:', JSON.stringify(updateData, null, 2));
+      await updateDoc(commentDoc.ref, updateData);
+      console.log('✅ [FIRESTORE WRITE] Comment likes updated successfully');
+      
+      console.log('[PresentationService] User like toggled successfully:', { newLikes, newLikedBy });
+      return { likes: newLikes, likedBy: newLikedBy };
+    } catch (err) {
+      console.error('[PresentationService] Error toggling user like:', err);
+      throw err;
+    }
+  }
+
+  // Update comment likes (legacy method - keeping for compatibility)
   async updateCommentLikes(courseId, presentationId, slideIndex, commentId, likeCount) {
     try {
       console.log('[PresentationService] Updating comment likes:', { courseId, presentationId, slideIndex, commentId, likeCount });
-      const commentDoc = doc(db, 'courses', courseId, 'presentations', presentationId, 'comments', commentId);
-      await updateDoc(commentDoc, { likes: likeCount });
-      console.log('[PresentationService] Comment likes updated successfully');
+      
+      // Since comments are stored in subcollections, we need to find which user owns this comment
+      // We'll use a collectionGroup query to find the comment
+      const commentsQuery = query(
+        collectionGroup(db, 'comments'),
+        where('courseId', '==', courseId),
+        where('presentationId', '==', presentationId),
+        where('slideIndex', '==', slideIndex)
+      );
+      
+      const snapshot = await getDocs(commentsQuery);
+      const commentDoc = snapshot.docs.find(doc => doc.id === commentId);
+      
+      if (commentDoc) {
+        const updateData = { likes: likeCount };
+        console.log('🔥 [FIRESTORE WRITE] Updating comment likes (legacy) in Firestore:', JSON.stringify(updateData, null, 2));
+        await updateDoc(commentDoc.ref, updateData);
+        console.log('✅ [FIRESTORE WRITE] Comment likes updated successfully');
+      } else {
+        console.error('[PresentationService] Comment not found for updating likes:', commentId);
+        throw new Error('Comment not found');
+      }
     } catch (err) {
       console.error('[PresentationService] Error updating comment likes:', err);
       throw err;
@@ -496,11 +578,61 @@ class PresentationService {
   async updateCommentReplies(courseId, presentationId, slideIndex, commentId, replies, replyLikes) {
     try {
       console.log('[PresentationService] Updating comment replies:', { courseId, presentationId, slideIndex, commentId, replies, replyLikes });
-      const commentDoc = doc(db, 'courses', courseId, 'presentations', presentationId, 'comments', commentId);
-      await updateDoc(commentDoc, { replies, replyLikes });
-      console.log('[PresentationService] Comment replies updated successfully');
+      
+      // Since comments are stored in subcollections, we need to find which user owns this comment
+      // We'll use a collectionGroup query to find the comment
+      const commentsQuery = query(
+        collectionGroup(db, 'comments'),
+        where('courseId', '==', courseId),
+        where('presentationId', '==', presentationId),
+        where('slideIndex', '==', slideIndex)
+      );
+      
+      const snapshot = await getDocs(commentsQuery);
+      const commentDoc = snapshot.docs.find(doc => doc.id === commentId);
+      
+      if (commentDoc) {
+        const updateData = { replies, replyLikes };
+        console.log('🔥 [FIRESTORE WRITE] Updating comment replies in Firestore:', JSON.stringify(updateData, null, 2));
+        await updateDoc(commentDoc.ref, updateData);
+        console.log('✅ [FIRESTORE WRITE] Comment replies updated successfully');
+      } else {
+        console.error('[PresentationService] Comment not found for updating replies:', commentId);
+        throw new Error('Comment not found');
+      }
     } catch (err) {
       console.error('[PresentationService] Error updating comment replies:', err);
+      throw err;
+    }
+  }
+
+  // Update comment grouped status
+  async updateCommentGroupedStatus(courseId, presentationId, slideIndex, commentId, isGrouped) {
+    try {
+      console.log('[PresentationService] Updating comment grouped status:', { courseId, presentationId, slideIndex, commentId, isGrouped });
+      
+      // Find the comment
+      const commentsQuery = query(
+        collectionGroup(db, 'comments'),
+        where('courseId', '==', courseId),
+        where('presentationId', '==', presentationId),
+        where('slideIndex', '==', slideIndex)
+      );
+      
+      const snapshot = await getDocs(commentsQuery);
+      const commentDoc = snapshot.docs.find(doc => doc.id === commentId);
+      
+      if (commentDoc) {
+        const updateData = { grouped: isGrouped };
+        console.log('🔥 [FIRESTORE WRITE] Updating comment grouped status in Firestore:', JSON.stringify(updateData, null, 2));
+        await updateDoc(commentDoc.ref, updateData);
+        console.log('✅ [FIRESTORE WRITE] Comment grouped status updated successfully');
+      } else {
+        console.error('[PresentationService] Comment not found for updating grouped status:', commentId);
+        throw new Error('Comment not found');
+      }
+    } catch (err) {
+      console.error('[PresentationService] Error updating comment grouped status:', err);
       throw err;
     }
   }
@@ -509,13 +641,187 @@ class PresentationService {
   async removeComment(courseId, presentationId, slideIndex, commentId) {
     try {
       console.log('[PresentationService] Removing comment:', { courseId, presentationId, slideIndex, commentId });
-      const commentDoc = doc(db, 'courses', courseId, 'presentations', presentationId, 'comments', commentId);
-      await deleteDoc(commentDoc);
-      console.log('[PresentationService] Comment removed successfully');
+      const commentQuery = query(
+        collectionGroup(db, 'comments'),
+        where('courseId', '==', courseId),
+        where('presentationId', '==', presentationId),
+        where('slideIndex', '==', slideIndex),
+        where('id', '==', commentId)
+      );
+      const snapshot = await getDocs(commentQuery);
+      if (!snapshot.empty) {
+        await deleteDoc(snapshot.docs[0].ref);
+        console.log('[PresentationService] Comment removed successfully');
+      }
     } catch (err) {
       console.error('[PresentationService] Error removing comment:', err);
       throw err;
     }
+  }
+
+  // New methods for simplified data consistency strategy
+
+  // Update comment's groupId (single source of truth)
+  async updateCommentGroupId(courseId, presentationId, slideIndex, commentId, groupId) {
+    try {
+      console.log('[PresentationService] Updating comment groupId:', { courseId, presentationId, slideIndex, commentId, groupId });
+      const commentQuery = query(
+        collectionGroup(db, 'comments'),
+        where('courseId', '==', courseId),
+        where('presentationId', '==', presentationId),
+        where('slideIndex', '==', slideIndex),
+        where('id', '==', commentId)
+      );
+      const snapshot = await getDocs(commentQuery);
+      if (!snapshot.empty) {
+        await updateDoc(snapshot.docs[0].ref, { groupId });
+        console.log('[PresentationService] Comment groupId updated successfully');
+      }
+    } catch (err) {
+      console.error('[PresentationService] Error updating comment groupId:', err);
+      throw err;
+    }
+  }
+
+  // Update group position (x, y coordinates)
+  async updateGroupPosition(courseId, presentationId, slideIndex, groupId, x, y) {
+    try {
+      console.log('[PresentationService] Updating group position:', { courseId, presentationId, slideIndex, groupId, x, y });
+      const groupDoc = doc(db, 'courses', courseId, 'presentations', presentationId, 'slides', slideIndex.toString(), 'groups', groupId);
+      await updateDoc(groupDoc, { x, y });
+      console.log('[PresentationService] Group position updated successfully');
+    } catch (err) {
+      console.error('[PresentationService] Error updating group position:', err);
+      throw err;
+    }
+  }
+
+  // Update group name
+  async updateGroupName(courseId, presentationId, slideIndex, groupId, name) {
+    try {
+      console.log('[PresentationService] Updating group name:', { courseId, presentationId, slideIndex, groupId, name });
+      const groupDoc = doc(db, 'courses', courseId, 'presentations', presentationId, 'slides', slideIndex.toString(), 'groups', groupId);
+      await updateDoc(groupDoc, { name });
+      console.log('[PresentationService] Group name updated successfully');
+    } catch (err) {
+      console.error('[PresentationService] Error updating group name:', err);
+      throw err;
+    }
+  }
+
+  // Add reply to a comment
+  async addReply(courseId, presentationId, slideIndex, commentId, replyData) {
+    try {
+      console.log('[PresentationService] Adding reply:', { courseId, presentationId, slideIndex, commentId, replyData });
+      const commentQuery = query(
+        collectionGroup(db, 'comments'),
+        where('courseId', '==', courseId),
+        where('presentationId', '==', presentationId),
+        where('slideIndex', '==', slideIndex),
+        where('id', '==', commentId)
+      );
+      const snapshot = await getDocs(commentQuery);
+      if (!snapshot.empty) {
+        const commentDoc = snapshot.docs[0];
+        const currentReplies = commentDoc.data().replies || [];
+        const newReply = {
+          ...replyData,
+          id: Date.now().toString(), // Simple ID generation
+          likes: 0,
+          likedBy: []
+        };
+        const updatedReplies = [...currentReplies, newReply];
+        await updateDoc(commentDoc.ref, { replies: updatedReplies });
+        console.log('[PresentationService] Reply added successfully');
+        return newReply;
+      }
+    } catch (err) {
+      console.error('[PresentationService] Error adding reply:', err);
+      throw err;
+    }
+  }
+
+  // Toggle like for a reply
+  async toggleReplyLike(courseId, presentationId, slideIndex, commentId, replyIndex, userId) {
+    try {
+      console.log('[PresentationService] Toggling reply like:', { courseId, presentationId, slideIndex, commentId, replyIndex, userId });
+      const commentQuery = query(
+        collectionGroup(db, 'comments'),
+        where('courseId', '==', courseId),
+        where('presentationId', '==', presentationId),
+        where('slideIndex', '==', slideIndex),
+        where('id', '==', commentId)
+      );
+      const snapshot = await getDocs(commentQuery);
+      if (!snapshot.empty) {
+        const commentDoc = snapshot.docs[0];
+        const commentData = commentDoc.data();
+        const replies = commentData.replies || [];
+        
+        if (replies[replyIndex]) {
+          const reply = replies[replyIndex];
+          const likedBy = reply.likedBy || [];
+          const userLiked = likedBy.includes(userId);
+          
+          let updatedLikedBy, updatedLikes;
+          if (userLiked) {
+            updatedLikedBy = likedBy.filter(id => id !== userId);
+            updatedLikes = Math.max(0, (reply.likes || 0) - 1);
+          } else {
+            updatedLikedBy = [...likedBy, userId];
+            updatedLikes = (reply.likes || 0) + 1;
+          }
+          
+          const updatedReplies = [...replies];
+          updatedReplies[replyIndex] = {
+            ...reply,
+            likes: updatedLikes,
+            likedBy: updatedLikedBy
+          };
+          
+          await updateDoc(commentDoc.ref, { replies: updatedReplies });
+          console.log('[PresentationService] Reply like toggled successfully');
+          return { likes: updatedLikes, likedBy: updatedLikedBy };
+        }
+      }
+    } catch (err) {
+      console.error('[PresentationService] Error toggling reply like:', err);
+      throw err;
+    }
+  }
+
+  // Delete a reply
+  async deleteReply(courseId, presentationId, slideIndex, commentId, replyIndex) {
+    try {
+      console.log('[PresentationService] Deleting reply:', { courseId, presentationId, slideIndex, commentId, replyIndex });
+      const commentQuery = query(
+        collectionGroup(db, 'comments'),
+        where('courseId', '==', courseId),
+        where('presentationId', '==', presentationId),
+        where('slideIndex', '==', slideIndex),
+        where('id', '==', commentId)
+      );
+      const snapshot = await getDocs(commentQuery);
+      if (!snapshot.empty) {
+        const commentDoc = snapshot.docs[0];
+        const commentData = commentDoc.data();
+        const replies = commentData.replies || [];
+        
+        if (replies[replyIndex]) {
+          const updatedReplies = replies.filter((_, index) => index !== replyIndex);
+          await updateDoc(commentDoc.ref, { replies: updatedReplies });
+          console.log('[PresentationService] Reply deleted successfully');
+        }
+      }
+    } catch (err) {
+      console.error('[PresentationService] Error deleting reply:', err);
+      throw err;
+    }
+  }
+
+  // Delete comment (alias for removeComment for consistency)
+  async deleteComment(courseId, presentationId, slideIndex, commentId) {
+    return this.removeComment(courseId, presentationId, slideIndex, commentId);
   }
 }
 

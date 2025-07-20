@@ -77,10 +77,10 @@ const AppContent = () => {
   // Hide Navbar in live viewer mode
   const isLiveViewer = /^\/course\/[^/]+\/live$/.test(location.pathname);
   return (
-    <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen bg-gray-50">
       {!isLiveViewer && <Navbar />}
-      <main>
-        <Routes>
+        <main>
+          <Routes>
             {/* Public Routes */}
             <Route path="/" element={<Home />} />
             <Route path="/login" element={<Login />} />
@@ -144,9 +144,9 @@ const AppContent = () => {
 
             {/* Catch all route */}
             <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </main>
-    </div>
+          </Routes>
+        </main>
+      </div>
   );
 };
 
@@ -155,7 +155,7 @@ const App = () => {
   return (
     <AuthProvider>
       <Router>
-        <AppContent />
+      <AppContent />
       </Router>
       <Toaster
         position="top-right"

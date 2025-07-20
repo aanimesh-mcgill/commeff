@@ -85,19 +85,29 @@ const LivePresentationViewer = () => {
   const addCommentToFirestore = async (commentData) => {
     try {
       const commentsRef = getCommentsCollection();
-      if (!commentsRef) return null;
+      if (!commentsRef) {
+        console.error('[Firestore] Comments collection is null - courseId:', courseId, 'presentationId:', presentationId);
+        return null;
+      }
+      
+      const userId = getUserId();
+      const userName = currentUser?.displayName || username || 'Anonymous';
+      
+      console.log('[Firestore] Adding comment to collection:', commentsRef.path);
+      console.log('[Firestore] Comment data:', { ...commentData, userId, userName });
       
       const docRef = await addDoc(commentsRef, {
         ...commentData,
         createdAt: new Date(),
-        userId: getUserId(),
-        userName: currentUser?.displayName || username || 'Anonymous'
+        userId: userId,
+        userName: userName
       });
       
-      console.log('[Firestore] Comment added:', docRef.id, commentData);
+      console.log('[Firestore] Comment successfully added with ID:', docRef.id);
       return docRef.id;
     } catch (error) {
       console.error('[Firestore] Error adding comment:', error);
+      console.error('[Firestore] Error details:', error.code, error.message);
       return null;
     }
   };
@@ -311,19 +321,59 @@ const LivePresentationViewer = () => {
 
   // Set up Firestore listeners for comments, groups, and likes
   useEffect(() => {
-    if (!presentationId || !courseId || !firestoreInitialized) return;
+    if (!presentationId || !courseId || !firestoreInitialized) {
+      console.log('[LiveViewer] Firestore listeners not ready:', { 
+        presentationId, 
+        courseId, 
+        firestoreInitialized 
+      });
+      return;
+    }
     
     console.log('[LiveViewer] Setting up Firestore listeners for comments, groups, and likes');
+    console.log('[LiveViewer] Paths:', {
+      comments: `courses/${courseId}/presentations/${presentationId}/comments`,
+      groups: `courses/${courseId}/presentations/${presentationId}/groups`,
+      likes: `courses/${courseId}/presentations/${presentationId}/likes`
+    });
     
     const commentsRef = getCommentsCollection();
     const groupsRef = getGroupsCollection();
     const likesRef = getLikesCollection();
     
-    if (!commentsRef || !groupsRef || !likesRef) return;
+    if (!commentsRef || !groupsRef || !likesRef) {
+      console.error('[LiveViewer] One or more collections are null:', {
+        commentsRef: !!commentsRef,
+        groupsRef: !!groupsRef,
+        likesRef: !!likesRef
+      });
+      return;
+    }
     
     // Comments listener
     const commentsQuery = query(commentsRef, orderBy('createdAt', 'asc'));
+    console.log('[Firestore] Setting up comments listener for query:', commentsQuery);
+    
     const commentsUnsubscribe = onSnapshot(commentsQuery, (snapshot) => {
+      console.log('[Firestore] Comments snapshot received:', {
+        empty: snapshot.empty,
+        size: snapshot.size,
+        changes: snapshot.docChanges().length
+      });
+      
+      // Handle existing documents (initial load)
+      if (!commentsLoaded) {
+        console.log('[Firestore] Loading existing comments...');
+        snapshot.docs.forEach((doc) => {
+          const commentData = { id: doc.id, ...doc.data() };
+          console.log('[Firestore] Loading existing comment:', commentData);
+          window.addCommentToUI(commentData);
+        });
+        setCommentsLoaded(true);
+        return;
+      }
+      
+      // Handle changes (real-time updates)
       snapshot.docChanges().forEach((change) => {
         const commentData = { id: change.doc.id, ...change.doc.data() };
         console.log('[Firestore] Comment change:', change.type, commentData);
@@ -346,14 +396,33 @@ const LivePresentationViewer = () => {
           window.removeCommentFromUI(commentData.id);
         }
       });
-      setCommentsLoaded(true);
     }, (error) => {
       console.error('[Firestore] Error in comments listener:', error);
+      console.error('[Firestore] Error details:', error.code, error.message);
     });
     
     // Groups listener
     const groupsQuery = query(groupsRef, orderBy('createdAt', 'asc'));
     const groupsUnsubscribe = onSnapshot(groupsQuery, (snapshot) => {
+      console.log('[Firestore] Groups snapshot received:', {
+        empty: snapshot.empty,
+        size: snapshot.size,
+        changes: snapshot.docChanges().length
+      });
+      
+      // Handle existing documents (initial load)
+      if (!groupsLoaded) {
+        console.log('[Firestore] Loading existing groups...');
+        snapshot.docs.forEach((doc) => {
+          const groupData = { id: doc.id, ...doc.data() };
+          console.log('[Firestore] Loading existing group:', groupData);
+          window.addGroupToUI(groupData);
+        });
+        setGroupsLoaded(true);
+        return;
+      }
+      
+      // Handle changes (real-time updates)
       snapshot.docChanges().forEach((change) => {
         const groupData = { id: change.doc.id, ...change.doc.data() };
         console.log('[Firestore] Group change:', change.type, groupData);
@@ -369,7 +438,6 @@ const LivePresentationViewer = () => {
           window.removeGroupFromUI(groupData.id);
         }
       });
-      setGroupsLoaded(true);
     }, (error) => {
       console.error('[Firestore] Error in groups listener:', error);
     });
@@ -421,6 +489,7 @@ const LivePresentationViewer = () => {
     if (!containerRef.current || !courseId || !presentationId) return;
 
     // Set Firestore as initialized after presentation is loaded
+    console.log('[LiveViewer] Setting firestoreInitialized to true');
     setFirestoreInitialized(true);
 
     // Create the HTML structure with slide and toggle panel

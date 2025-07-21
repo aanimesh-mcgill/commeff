@@ -35,7 +35,7 @@ const LivePresentationViewer = () => {
   const [firestoreInitialized, setFirestoreInitialized] = useState(false);
 
   // Version tracking
-  const VERSION = "V1.4.10";
+  const VERSION = "V1.4.11";
 
   // DEBUG LOGGING for Firestore rule troubleshooting
   useEffect(() => {
@@ -185,6 +185,13 @@ const LivePresentationViewer = () => {
       
       const groupDoc = doc(groupsRef, groupId);
       console.log('[DEBUG] Updating group document:', groupDoc.path);
+      
+      // Check if the group still exists before updating
+      const groupSnap = await getDoc(groupDoc);
+      if (!groupSnap.exists()) {
+        console.log('[DEBUG] Group no longer exists, skipping update:', groupId);
+        return;
+      }
       
       const updateData = {
         ...updates,
@@ -2299,6 +2306,12 @@ const LivePresentationViewer = () => {
     console.log('[DEBUG] manageGroupData - groupId:', groupId);
     if (!groupId) {
       console.log('[DEBUG] No groupId found in element');
+      return;
+    }
+    
+    // Check if the group element still exists in DOM (prevents operations on deleted groups)
+    if (!groupElement.isConnected) {
+      console.log('[DEBUG] Group element no longer in DOM, skipping operation:', groupId);
       return;
     }
 

@@ -35,7 +35,7 @@ const LivePresentationViewer = () => {
   const [firestoreInitialized, setFirestoreInitialized] = useState(false);
 
   // Version tracking
-  const VERSION = "V1.4.12";
+  const VERSION = "V1.4.13";
 
   // DEBUG LOGGING for Firestore rule troubleshooting
   useEffect(() => {
@@ -404,6 +404,16 @@ const LivePresentationViewer = () => {
           window.addCommentToUI(commentData);
         });
         setCommentsLoaded(true);
+        
+        // Load any pending groups now that comments are available
+        if (window.pendingGroups && window.pendingGroups.length > 0) {
+          console.log('[Firestore] Loading pending groups after comments loaded:', window.pendingGroups.length);
+          window.pendingGroups.forEach((groupData) => {
+            console.log('[Firestore] Loading pending group:', groupData);
+            window.addGroupToUI(groupData);
+          });
+          window.pendingGroups = [];
+        }
         return;
       }
       
@@ -457,11 +467,21 @@ const LivePresentationViewer = () => {
         if (snapshot.docs.length === 0) {
           console.log('[DEBUG] No groups found in Firestore');
         }
-        snapshot.docs.forEach((doc) => {
-          const groupData = { id: doc.id, ...doc.data() };
-          console.log('[Firestore] Loading existing group:', groupData);
-          window.addGroupToUI(groupData);
-        });
+        
+        // Store groups data to load after comments are ready
+        const groupsToLoad = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+        
+        // If comments are already loaded, load groups immediately
+        if (commentsLoaded) {
+          groupsToLoad.forEach((groupData) => {
+            console.log('[Firestore] Loading existing group:', groupData);
+            window.addGroupToUI(groupData);
+          });
+        } else {
+          // Store groups to load when comments are ready
+          window.pendingGroups = groupsToLoad;
+        }
+        
         setGroupsLoaded(true);
         return;
       }
@@ -497,6 +517,24 @@ const LivePresentationViewer = () => {
     
     // Likes listener
     const likesUnsubscribe = onSnapshot(likesRef, (snapshot) => {
+      console.log('[Firestore] Likes snapshot received:', {
+        empty: snapshot.empty,
+        size: snapshot.size,
+        changes: snapshot.docChanges().length
+      });
+      
+      // Handle existing documents (initial load)
+      if (!commentsLoaded) {
+        console.log('[Firestore] Loading existing likes...');
+        snapshot.docs.forEach((doc) => {
+          const likeData = { id: doc.id, ...doc.data() };
+          console.log('[Firestore] Loading existing like:', likeData);
+          window.addLikeToUI(likeData);
+        });
+        return;
+      }
+      
+      // Handle changes (real-time updates)
       snapshot.docChanges().forEach((change) => {
         const likeData = { id: change.doc.id, ...change.doc.data() };
         console.log('[Firestore] Like change:', change.type, likeData);
@@ -1361,44 +1399,54 @@ const LivePresentationViewer = () => {
       const { targetId, targetType, userId: likerId } = likeData;
       const currentUserId = getUserId();
       
-      // Only update UI if it's not our own like (to avoid double-counting)
-      if (likerId !== currentUserId) {
-        if (targetType === 'comment') {
-          if (commentsMap[targetId]) {
-            commentsMap[targetId].likes = (commentsMap[targetId].likes || 0) + 1;
-            updateCommentLikes(targetId, commentsMap[targetId].likes);
-          }
-        } else if (targetType === 'reply') {
-          const [commentId, replyIndex] = targetId.split('_reply_');
-          if (commentsMap[commentId] && commentsMap[commentId].replyLikes[replyIndex] !== undefined) {
-            commentsMap[commentId].replyLikes[replyIndex] = (commentsMap[commentId].replyLikes[replyIndex] || 0) + 1;
-            updateReplyLikes(commentId, parseInt(replyIndex), commentsMap[commentId].replyLikes[replyIndex]);
-          }
-        }
-        console.log('[UI] Like added from Firestore:', targetId, targetType);
+      // Add to userLikes Set if it's our own like
+      if (likerId === currentUserId) {
+        userLikes.add(targetId);
+        console.log('[UI] Added own like to userLikes Set:', targetId);
+        return;
       }
+      
+      // Update like count for other users' likes
+      if (targetType === 'comment') {
+        if (commentsMap[targetId]) {
+          commentsMap[targetId].likes = (commentsMap[targetId].likes || 0) + 1;
+          updateCommentLikes(targetId, commentsMap[targetId].likes);
+        }
+      } else if (targetType === 'reply') {
+        const [commentId, replyIndex] = targetId.split('_reply_');
+        if (commentsMap[commentId] && commentsMap[commentId].replyLikes[replyIndex] !== undefined) {
+          commentsMap[commentId].replyLikes[replyIndex] = (commentsMap[commentId].replyLikes[replyIndex] || 0) + 1;
+          updateReplyLikes(commentId, parseInt(replyIndex), commentsMap[commentId].replyLikes[replyIndex]);
+        }
+      }
+      console.log('[UI] Like added from Firestore:', targetId, targetType);
     };
 
     window.removeLikeFromUI = (likeData) => {
       const { targetId, targetType, userId: likerId } = likeData;
       const currentUserId = getUserId();
       
-      // Only update UI if it's not our own like (to avoid double-counting)
-      if (likerId !== currentUserId) {
-        if (targetType === 'comment') {
-          if (commentsMap[targetId]) {
-            commentsMap[targetId].likes = Math.max(0, (commentsMap[targetId].likes || 1) - 1);
-            updateCommentLikes(targetId, commentsMap[targetId].likes);
-          }
-        } else if (targetType === 'reply') {
-          const [commentId, replyIndex] = targetId.split('_reply_');
-          if (commentsMap[commentId] && commentsMap[commentId].replyLikes[replyIndex] !== undefined) {
-            commentsMap[commentId].replyLikes[replyIndex] = Math.max(0, (commentsMap[commentId].replyLikes[replyIndex] || 1) - 1);
-            updateReplyLikes(commentId, parseInt(replyIndex), commentsMap[commentId].replyLikes[replyIndex]);
-          }
-        }
-        console.log('[UI] Like removed from Firestore:', targetId, targetType);
+      // Remove from userLikes Set if it's our own like
+      if (likerId === currentUserId) {
+        userLikes.delete(targetId);
+        console.log('[UI] Removed own like from userLikes Set:', targetId);
+        return;
       }
+      
+      // Update like count for other users' unlikes
+      if (targetType === 'comment') {
+        if (commentsMap[targetId]) {
+          commentsMap[targetId].likes = Math.max(0, (commentsMap[targetId].likes || 1) - 1);
+          updateCommentLikes(targetId, commentsMap[targetId].likes);
+        }
+      } else if (targetType === 'reply') {
+        const [commentId, replyIndex] = targetId.split('_reply_');
+        if (commentsMap[commentId] && commentsMap[commentId].replyLikes[replyIndex] !== undefined) {
+          commentsMap[commentId].replyLikes[replyIndex] = Math.max(0, (commentsMap[commentId].replyLikes[replyIndex] || 1) - 1);
+          updateReplyLikes(commentId, parseInt(replyIndex), commentsMap[commentId].replyLikes[replyIndex]);
+        }
+      }
+      console.log('[UI] Like removed from Firestore:', targetId, targetType);
     };
 
     // Update slide display from React state
@@ -1525,9 +1573,9 @@ const LivePresentationViewer = () => {
                 return isInBounds && hasValidId;
               });
               
-              // Prevent creating new groups when dragging existing groups
-              if (draggedEl && draggedEl.closest('.note-box')) {
-                // console.log('[DEBUG] Dragging an existing group, not creating new one');
+              // Prevent creating new groups when dragging existing groups or group elements
+              if (draggedEl && (draggedEl.closest('.note-box') || draggedEl.classList.contains('grouped-comment'))) {
+                console.log('[DEBUG] Dragging an existing group or group element, not creating new one');
                 return;
               }
 
@@ -2029,36 +2077,37 @@ const LivePresentationViewer = () => {
       
       console.log('[DEBUG] removeGroup called for groupId:', groupId);
       
-      // Only delete from Firestore if it's a valid Firestore-backed group
+      // Get all comments in the group before removing it
+      const comments = group.querySelectorAll('li[data-id]');
+      
+      // Remove grouped state from all comments
+      comments.forEach(li => {
+        const commentId = li.dataset.id;
+        const data = commentsMap[commentId];
+        if (data) {
+          data.grouped = false;
+        }
+      });
+      
+      // Remove group from UI immediately
+      group.remove();
+      
+      // Update chat panel for all comments - remove grouped class from original comments
+      const chatList = document.getElementById("commentList");
+      comments.forEach(li => {
+        const commentId = li.dataset.id;
+        const existing = chatList.querySelector(`.comment[data-id='${commentId}']`);
+        if (existing) {
+          existing.classList.remove("grouped");
+        }
+      });
+      
+      // Delete from Firestore if it's a valid Firestore-backed group
       if (groupId && !groupId.startsWith('group_')) {
         console.log('[DEBUG] Deleting group from Firestore:', groupId);
         manageGroupData('delete', group);
       } else {
-        console.log('[DEBUG] Removing temporary group from UI only:', groupId);
-        // For temporary groups, remove immediately from UI
-        const comments = group.querySelectorAll('li[data-id]');
-        
-        // Remove grouped state from all comments
-        comments.forEach(li => {
-          const commentId = li.dataset.id;
-          const data = commentsMap[commentId];
-          if (data) {
-            data.grouped = false;
-          }
-        });
-        
-        // Remove group from UI
-        group.remove();
-        
-        // Update chat panel for all comments - remove grouped class from original comments
-        const chatList = document.getElementById("commentList");
-        comments.forEach(li => {
-          const commentId = li.dataset.id;
-          const existing = chatList.querySelector(`.comment[data-id='${commentId}']`);
-          if (existing) {
-            existing.classList.remove("grouped");
-          }
-        });
+        console.log('[DEBUG] Removed temporary group from UI only:', groupId);
       }
     }
 
@@ -2350,6 +2399,7 @@ const LivePresentationViewer = () => {
         
       case 'delete':
         console.log('[Firestore] Deleting group:', groupId);
+        // Don't pass the element since it's already removed from UI
         deleteGroupFromFirestore(groupId);
         break;
         

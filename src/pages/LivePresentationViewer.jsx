@@ -35,7 +35,7 @@ const LivePresentationViewer = () => {
   const [firestoreInitialized, setFirestoreInitialized] = useState(false);
 
   // Version tracking
-  const VERSION = "V1.4.13";
+  const VERSION = "V1.4.14";
 
   // DEBUG LOGGING for Firestore rule troubleshooting
   useEffect(() => {
@@ -1297,7 +1297,7 @@ const LivePresentationViewer = () => {
       
       group.innerHTML = `
                           <div class="group-header" style="font-weight: bold; margin-bottom: 10px; cursor: move;" onmousedown="handleGroupMouseDown(event, this.parentElement)">
-                    <input type="text" placeholder="Group Label" style="width: 100%; border: none; background: transparent; font-weight: bold;" onblur="manageGroupData('update_label', this.parentElement.parentElement, { label: this.value })" value="${name || 'New Group'}" onkeydown="if(event.key==='Enter')this.blur()">
+                    <input type="text" placeholder="Group Label" style="width: 100%; border: none; background: transparent; font-weight: bold; cursor: text;" onblur="manageGroupData('update_label', this.parentElement.parentElement, { label: this.value })" value="${name || 'New Group'}" onkeydown="if(event.key==='Enter')this.blur()" onclick="this.select()" onfocus="this.select()">
                     <span class="group-label" style="display: none;"></span>
                     <button onclick="removeGroup(this.parentElement.parentElement)" style="float: right; background: none; border: none; cursor: pointer; color: #dc3545;">✕</button>
                   </div>
@@ -1545,6 +1545,13 @@ const LivePresentationViewer = () => {
             const dropListener = function(e) {
               // console.log('[DEBUG] Drop event triggered (in toggleDiscussion)');
               e.preventDefault();
+              
+              // Prevent drop if we're dragging a group
+              if (window.isDraggingGroup) {
+                console.log('[DEBUG] Dropping while dragging group, ignoring drop event');
+                return;
+              }
+              
               if (!draggedEl) {
                 // console.log('[DEBUG] No draggedEl found');
                 return;
@@ -1576,6 +1583,13 @@ const LivePresentationViewer = () => {
               // Prevent creating new groups when dragging existing groups or group elements
               if (draggedEl && (draggedEl.closest('.note-box') || draggedEl.classList.contains('grouped-comment'))) {
                 console.log('[DEBUG] Dragging an existing group or group element, not creating new one');
+                return;
+              }
+              
+              // Additional check: if the dragged element is part of a group, don't create new group
+              const draggedGroup = draggedEl?.closest('.note-box');
+              if (draggedGroup) {
+                console.log('[DEBUG] Dragged element is part of existing group, not creating new one');
                 return;
               }
 
@@ -1679,7 +1693,7 @@ const LivePresentationViewer = () => {
                 
                 group.innerHTML = `
                   <div class="group-header" style="font-weight: bold; margin-bottom: 10px; cursor: move;" onmousedown="handleGroupMouseDown(event, this.parentElement)">
-                    <input type="text" placeholder="Group Label" style="width: 100%; border: none; background: transparent; font-weight: bold;" onblur="manageGroupData('update_label', this.parentElement.parentElement, { label: this.value })" onkeydown="if(event.key==='Enter')this.blur()" value="New Group">
+                    <input type="text" placeholder="Group Label" style="width: 100%; border: none; background: transparent; font-weight: bold; cursor: text;" onblur="manageGroupData('update_label', this.parentElement.parentElement, { label: this.value })" onkeydown="if(event.key==='Enter')this.blur()" onclick="this.select()" onfocus="this.select()" value="New Group">
                     <span class="group-label" style="display: none;"></span>
                     <button onclick="removeGroup(this.parentElement.parentElement)" style="float: right; background: none; border: none; cursor: pointer; color: #dc3545;">✕</button>
                   </div>
@@ -2124,6 +2138,9 @@ const LivePresentationViewer = () => {
       e.preventDefault();
       e.stopPropagation();
       
+      // Set global flag to indicate we're dragging a group
+      window.isDraggingGroup = true;
+      
       let isDragging = false;
       let startX, startY;
       let originalLeft, originalTop;
@@ -2152,6 +2169,8 @@ const LivePresentationViewer = () => {
         }
         
         isDragging = false;
+        // Clear global flag when drag ends
+        window.isDraggingGroup = false;
         document.removeEventListener('mousemove', handleMouseMove);
         document.removeEventListener('mouseup', handleMouseUp);
       };

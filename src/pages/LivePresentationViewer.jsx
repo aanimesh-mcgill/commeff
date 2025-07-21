@@ -35,7 +35,7 @@ const LivePresentationViewer = () => {
   const [firestoreInitialized, setFirestoreInitialized] = useState(false);
 
   // Version tracking
-  const VERSION = "1.4.2";
+  const VERSION = "VgroupsBeingSaved";
 
   // DEBUG LOGGING for Firestore rule troubleshooting
   useEffect(() => {
@@ -145,42 +145,59 @@ const LivePresentationViewer = () => {
   };
 
   const addGroupToFirestore = async (groupData) => {
+    console.log('[DEBUG] addGroupToFirestore called with:', groupData);
     try {
       const groupsRef = getGroupsCollection();
+      console.log('[DEBUG] groupsRef path:', groupsRef?.path);
       if (!groupsRef) {
         console.error('[Firestore] getGroupsCollection() returned null!');
         return null;
       }
       if (!groupData) return null;
       
-      const docRef = await addDoc(groupsRef, {
+      const groupDataWithMetadata = {
         ...groupData,
         createdAt: new Date(),
         createdBy: getUserId()
-      });
+      };
+      console.log('[DEBUG] Group data to save:', groupDataWithMetadata);
       
-      console.log('[Firestore] Group added:', docRef.id, groupData);
+      const docRef = await addDoc(groupsRef, groupDataWithMetadata);
+      
+      console.log('[Firestore] Group added successfully:', docRef.id, groupData);
+      console.log('[DEBUG] Group document path:', docRef.path);
       return docRef.id;
     } catch (error) {
       console.error('[Firestore] Error adding group:', error);
+      console.error('[Firestore] Error details:', error.code, error.message);
       return null;
     }
   };
 
   const updateGroupInFirestore = async (groupId, updates) => {
+    console.log('[DEBUG] updateGroupInFirestore called with:', groupId, updates);
     try {
       const groupsRef = getGroupsCollection();
-      if (!groupsRef) return;
+      if (!groupsRef) {
+        console.error('[Firestore] getGroupsCollection() returned null for update!');
+        return;
+      }
       
       const groupDoc = doc(groupsRef, groupId);
-      await updateDoc(groupDoc, {
+      console.log('[DEBUG] Updating group document:', groupDoc.path);
+      
+      const updateData = {
         ...updates,
         updatedAt: new Date()
-      });
+      };
+      console.log('[DEBUG] Update data:', updateData);
       
-      console.log('[Firestore] Group updated:', groupId, updates);
+      await updateDoc(groupDoc, updateData);
+      
+      console.log('[Firestore] Group updated successfully:', groupId, updates);
     } catch (error) {
       console.error('[Firestore] Error updating group:', error);
+      console.error('[Firestore] Error details:', error.code, error.message);
     }
   };
 
@@ -285,6 +302,10 @@ const LivePresentationViewer = () => {
         }
         
         setAudienceMode(presentationData.audienceMode || 'enrolledUsers');
+        
+        // Set Firestore as initialized when we have presentation data
+        console.log('[LiveViewer] Setting firestoreInitialized to true (from fetchLive)');
+        setFirestoreInitialized(true);
         
       } catch (error) {
         console.error('[LiveViewer] Error fetching live presentation:', error);
@@ -410,16 +431,25 @@ const LivePresentationViewer = () => {
     // Groups listener
     const groupsQuery = query(groupsRef, orderBy('createdAt', 'asc'));
     console.log('[DEBUG] Setting up groups listener for:', groupsRef.path);
+    console.log('[DEBUG] Groups listener - firestoreInitialized:', firestoreInitialized);
+    console.log('[DEBUG] Groups listener - groupsLoaded:', groupsLoaded);
+    console.log('[DEBUG] Groups query:', groupsQuery);
+    
     const groupsUnsubscribe = onSnapshot(groupsQuery, (snapshot) => {
       console.log('[Firestore] Groups snapshot received:', {
         empty: snapshot.empty,
         size: snapshot.size,
-        changes: snapshot.docChanges().length
+        changes: snapshot.docChanges().length,
+        docs: snapshot.docs.map(doc => ({ id: doc.id, data: doc.data() }))
       });
       
       // Handle existing documents (initial load)
       if (!groupsLoaded) {
         console.log('[Firestore] Loading existing groups...');
+        console.log('[DEBUG] Number of groups to load:', snapshot.docs.length);
+        if (snapshot.docs.length === 0) {
+          console.log('[DEBUG] No groups found in Firestore');
+        }
         snapshot.docs.forEach((doc) => {
           const groupData = { id: doc.id, ...doc.data() };
           console.log('[Firestore] Loading existing group:', groupData);
@@ -433,15 +463,24 @@ const LivePresentationViewer = () => {
       snapshot.docChanges().forEach((change) => {
         const groupData = { id: change.doc.id, ...change.doc.data() };
         console.log('[Firestore] Group change:', change.type, groupData);
+        console.log('[DEBUG] Group change details:', {
+          type: change.type,
+          docId: change.doc.id,
+          docPath: change.doc.ref.path,
+          data: change.doc.data()
+        });
         
         if (change.type === 'added') {
           // Add new group to UI
+          console.log('[DEBUG] Adding new group to UI from Firestore');
           window.addGroupToUI(groupData);
         } else if (change.type === 'modified') {
           // Update existing group in UI
+          console.log('[DEBUG] Updating existing group in UI from Firestore');
           window.updateGroupInUI(groupData);
         } else if (change.type === 'removed') {
           // Remove group from UI
+          console.log('[DEBUG] Removing group from UI from Firestore');
           window.removeGroupFromUI(groupData.id);
         }
       });
@@ -494,10 +533,6 @@ const LivePresentationViewer = () => {
   // Initialize vanilla JS discussion overlay
   useEffect(() => {
     if (!containerRef.current || !courseId || !presentationId) return;
-
-    // Set Firestore as initialized after presentation is loaded
-    console.log('[LiveViewer] Setting firestoreInitialized to true');
-    setFirestoreInitialized(true);
 
     // Create the HTML structure with slide and toggle panel
     containerRef.current.innerHTML = `
@@ -1012,7 +1047,7 @@ const LivePresentationViewer = () => {
         const comment = commentsMap[id];
         console.log('[UI] Found comment for grouping:', id, comment);
 
-        const targetGroup = Array.from(slideElement.querySelectorAll(".note-box")).find(g => {
+        const targetGroup = Array.from(groupingAreaElement.querySelectorAll(".note-box")).find(g => {
           const rect = g.getBoundingClientRect();
           return e.clientX > rect.left && e.clientX < rect.right &&
                  e.clientY > rect.top && e.clientY < rect.bottom;
@@ -1020,7 +1055,29 @@ const LivePresentationViewer = () => {
 
         if (targetGroup) {
           console.log('[UI] Adding to existing group:', targetGroup);
-          // Move to another group
+          
+          // Check if comment is already in this group
+          const existingComment = targetGroup.querySelector(`li[data-id="${id}"]`);
+          if (existingComment) {
+            console.log('[UI] Comment already in this group, skipping');
+            return;
+          }
+          
+          // Add comment to existing group in Firestore
+          const groupId = targetGroup.dataset.groupId;
+          if (groupId && !groupId.startsWith('group_')) {
+            const currentCommentIds = Array.from(targetGroup.querySelectorAll('li[data-id]'))
+              .map(el => el.dataset.id)
+              .filter(commentId => commentId && commentId !== id);
+            
+            if (!currentCommentIds.includes(id)) {
+              currentCommentIds.push(id);
+              console.log('[UI] Updating group in Firestore with new comment:', groupId, currentCommentIds);
+              updateGroupInFirestore(groupId, { commentIds: currentCommentIds });
+            }
+          }
+          
+          // Add to UI
           const ul = targetGroup.querySelector("ul");
           const li = document.createElement("li");
           li.className = "grouped-comment";
@@ -1066,7 +1123,9 @@ const LivePresentationViewer = () => {
           
           // Add to Firestore first
           console.log('[UI] Creating new group with data:', groupData);
+          console.log('[DEBUG] About to call addGroupToFirestore...');
           addGroupToFirestore(groupData).then(firestoreGroupId => {
+            console.log('[DEBUG] addGroupToFirestore returned:', firestoreGroupId);
             if (!firestoreGroupId) {
               console.error('[UI] Firestore group creation failed, not adding group to UI.');
               return;
@@ -1086,8 +1145,8 @@ const LivePresentationViewer = () => {
             
             group.innerHTML = `
               <div class="note-header" onmousedown="handleGroupMouseDown(event, this.closest('.note-box'))">
-                <span contenteditable onclick="selectAll(this)">${groupData.name}</span>
-                <span class="remove-group" onclick="removeGroup(this)">×</span>
+                <input type="text" placeholder="Group Label" style="width: 100%; border: none; background: transparent; font-weight: bold;" onblur="manageGroupData('update_label', this.parentElement.parentElement, { label: this.value })" value="${groupData.name || 'New Group'}">
+                <span class="remove-group" onclick="removeGroup(this.parentElement.parentElement)">×</span>
               </div>
               <ul class="note-comments">
                 <li class="grouped-comment" data-id="${id}" data-type="comment" draggable="true">
@@ -1107,6 +1166,8 @@ const LivePresentationViewer = () => {
             const groupingArea = document.getElementById('groupingArea');
             if (groupingArea) {
               groupingArea.appendChild(group);
+              console.log('[DEBUG] Group added to DOM with ID:', firestoreGroupId);
+              console.log('[DEBUG] Group element:', group);
             } else {
               console.warn('[UI] groupingArea not found. Group not appended.');
             }
@@ -1166,10 +1227,14 @@ const LivePresentationViewer = () => {
     };
 
     window.addGroupToUI = (groupData) => {
+      console.log('[DEBUG] window.addGroupToUI called with:', groupData);
       const { id, name, position, commentIds = [] } = groupData;
       // Remove any existing group node with this id
       const existing = document.querySelector(`.note-box[data-group-id='${id}']`);
-      if (existing) existing.remove();
+      if (existing) {
+        console.log('[DEBUG] Removing existing group with same ID:', id);
+        existing.remove();
+      }
       const group = document.createElement("div");
       group.className = "note-box";
       group.dataset.groupId = id;
@@ -1186,11 +1251,11 @@ const LivePresentationViewer = () => {
       group.style.position = "absolute";
       
       group.innerHTML = `
-        <div class="group-header" style="font-weight: bold; margin-bottom: 10px; cursor: move;" onmousedown="handleGroupMouseDown(event, this.parentElement)">
-          <input type="text" placeholder="Group Label" style="width: 100%; border: none; background: transparent; font-weight: bold;" onblur="this.parentElement.querySelector('.group-label').textContent = this.value" value="${name || 'New Group'}">
-          <span class="group-label" style="display: none;"></span>
-          <button onclick="removeGroup(this.parentElement.parentElement)" style="float: right; background: none; border: none; cursor: pointer; color: #dc3545;">✕</button>
-        </div>
+                          <div class="group-header" style="font-weight: bold; margin-bottom: 10px; cursor: move;" onmousedown="handleGroupMouseDown(event, this.parentElement)">
+                    <input type="text" placeholder="Group Label" style="width: 100%; border: none; background: transparent; font-weight: bold;" onblur="manageGroupData('update_label', this.parentElement.parentElement, { label: this.value })" value="${name || 'New Group'}" onkeydown="if(event.key==='Enter')this.blur()">
+                    <span class="group-label" style="display: none;"></span>
+                    <button onclick="removeGroup(this.parentElement.parentElement)" style="float: right; background: none; border: none; cursor: pointer; color: #dc3545;">✕</button>
+                  </div>
         <ul style="list-style: none; padding: 0; margin: 0;">
           ${commentIds.map(commentId => {
             const comment = commentsMap[commentId];
@@ -1214,13 +1279,22 @@ const LivePresentationViewer = () => {
         </ul>
       `;
       
-      // Add to slide area so it's visible on the slide
-      const slideElement = document.getElementById('slideArea');
-      if (slideElement) {
-        slideElement.appendChild(group);
-        console.log('[UI] Group added from Firestore to slide area:', id);
+      // Add to grouping area so it's visible in the discussion panel
+      const groupingArea = document.getElementById('groupingArea');
+      if (groupingArea) {
+        groupingArea.appendChild(group);
+        console.log('[UI] Group added from Firestore to grouping area:', id);
+        
+        // Add drag event listeners to the group comments
+        const groupComments = group.querySelectorAll('li[data-id]');
+        groupComments.forEach(li => {
+          li.addEventListener("dragstart", e => {
+            console.log('[DEBUG] Dragstart event triggered for group comment:', li.dataset.id);
+            draggedEl = li;
+          });
+        });
       } else {
-        console.log('[UI] Error: slideArea not found, cannot add group');
+        console.log('[UI] Error: groupingArea not found, cannot add group');
       }
     };
 
@@ -1404,6 +1478,104 @@ const LivePresentationViewer = () => {
               const comment = commentsMap[id];
               console.log('[UI] Found comment for grouping:', id, comment);
 
+              // Check if dropping on an existing group
+              const allGroups = Array.from(groupingAreaElement.querySelectorAll(".note-box"));
+              console.log('[DEBUG] All groups found in DOM:', allGroups.length);
+              allGroups.forEach((g, index) => {
+                console.log(`[DEBUG] Group ${index}:`, {
+                  element: g,
+                  groupId: g.dataset.groupId,
+                  style: g.style.cssText,
+                  rect: g.getBoundingClientRect()
+                });
+              });
+              
+              // Only consider groups with valid Firestore IDs as "existing"
+              const targetGroup = allGroups.find(g => {
+                const rect = g.getBoundingClientRect();
+                const isInBounds = e.clientX > rect.left && e.clientX < rect.right &&
+                       e.clientY > rect.top && e.clientY < rect.bottom;
+                const hasValidId = g.dataset.groupId && !g.dataset.groupId.startsWith('group_');
+                console.log('[DEBUG] Checking group bounds:', {
+                  groupId: g.dataset.groupId,
+                  hasValidId: hasValidId,
+                  mousePos: { x: e.clientX, y: e.clientY },
+                  rect: rect,
+                  isInBounds: isInBounds
+                });
+                return isInBounds && hasValidId;
+              });
+              
+              // Prevent creating new groups when dragging existing groups
+              if (draggedEl && draggedEl.closest('.note-box')) {
+                console.log('[DEBUG] Dragging an existing group, not creating new one');
+                return;
+              }
+
+              if (targetGroup) {
+                console.log('[UI] Adding to existing group in toggleDiscussion:', targetGroup);
+                console.log('[DEBUG] targetGroup dataset:', targetGroup.dataset);
+                console.log('[DEBUG] targetGroup groupId:', targetGroup.dataset.groupId);
+                
+                // Check if comment is already in this group
+                const existingComment = targetGroup.querySelector(`li[data-id="${id}"]`);
+                if (existingComment) {
+                  console.log('[UI] Comment already in this group, skipping');
+                  return;
+                }
+                
+                // Add comment to existing group in Firestore
+                const groupId = targetGroup.dataset.groupId;
+                console.log('[DEBUG] Processing groupId:', groupId, 'startsWith group_:', groupId?.startsWith('group_'));
+                if (groupId && !groupId.startsWith('group_')) {
+                  const currentCommentIds = Array.from(targetGroup.querySelectorAll('li[data-id]'))
+                    .map(el => el.dataset.id)
+                    .filter(commentId => commentId && commentId !== id);
+                  
+                  if (!currentCommentIds.includes(id)) {
+                    currentCommentIds.push(id);
+                    console.log('[UI] Updating group in Firestore with new comment:', groupId, currentCommentIds);
+                    updateGroupInFirestore(groupId, { commentIds: currentCommentIds });
+                  }
+                }
+                
+                // Add to UI
+                const ul = targetGroup.querySelector("ul");
+                const li = document.createElement("li");
+                li.className = "grouped-comment";
+                li.draggable = true;
+                li.dataset.id = id;
+                li.dataset.type = "comment";
+                li.addEventListener("dragstart", e => draggedEl = li);
+                
+                const hasReplies = comment.replies.length > 0;
+                const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
+                const isLiked = userLikes.has(id);
+                const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
+                
+                li.innerHTML = `
+                  <div class="comment-content">
+                    <div class="comment-text">${comment.text}</div>
+                    <div class="comment-actions">
+                      <span class="${likeClass}" onclick="like('${id}', this)">👍 ${comment.likes}</span>
+                      <button class="reply-btn" title="Reply" onclick="reply(this)">🗨️</button>
+                      <span class="remove-comment" onclick="removeFromGroup('${id}', this)">×</span>
+                      ${replyToggle}
+                    </div>
+                  </div>
+                `;
+                
+                ul.appendChild(li);
+                // Don't remove the original comment, just mark it as grouped
+                if (draggedEl) {
+                  draggedEl.classList.add('grouped');
+                }
+                comment.grouped = true;
+                updateGroupLikes(targetGroup);
+                updateGroupReplies(id);
+                return;
+              }
+
               // Create new group
               const groupData = {
                 name: 'New Group',
@@ -1443,7 +1615,7 @@ const LivePresentationViewer = () => {
                 
                 group.innerHTML = `
                   <div class="group-header" style="font-weight: bold; margin-bottom: 10px; cursor: move;" onmousedown="handleGroupMouseDown(event, this.parentElement)">
-                    <input type="text" placeholder="Group Label" style="width: 100%; border: none; background: transparent; font-weight: bold;" onblur="manageGroupData('update_label', this.parentElement.parentElement, { label: this.value })">
+                    <input type="text" placeholder="Group Label" style="width: 100%; border: none; background: transparent; font-weight: bold;" onblur="manageGroupData('update_label', this.parentElement.parentElement, { label: this.value })" onkeydown="if(event.key==='Enter')this.blur()">
                     <span class="group-label" style="display: none;"></span>
                     <button onclick="removeGroup(this.parentElement.parentElement)" style="float: right; background: none; border: none; cursor: pointer; color: #dc3545;">✕</button>
                   </div>
@@ -1882,27 +2054,41 @@ const LivePresentationViewer = () => {
       e.preventDefault();
       let isDragging = false;
       let startX, startY;
+      let originalLeft, originalTop;
+      
       const handleMouseMove = (e) => {
         if (isDragging) {
           const x = e.clientX - startX;
           const y = e.clientY - startY;
           group.style.left = x + 'px';
           group.style.top = y + 'px';
-          // Only update position, do not re-append or create new nodes
-          const groupId = group.dataset.groupId;
-          if (groupId && !groupId.startsWith('group_')) {
-            manageGroupData('update_position', group);
-          }
         }
       };
+      
       const handleMouseUp = () => {
+        if (isDragging) {
+          // Update Firestore with final position when drag ends
+          const groupId = group.dataset.groupId;
+          if (groupId && !groupId.startsWith('group_')) {
+            const finalPosition = {
+              x: parseInt(group.style.left) || 0,
+              y: parseInt(group.style.top) || 0
+            };
+            console.log('[DEBUG] Drag ended, updating group position in Firestore:', groupId, finalPosition);
+            updateGroupInFirestore(groupId, { position: finalPosition });
+          }
+        }
+        
         isDragging = false;
         document.removeEventListener('mousemove', handleMouseMove);
         document.removeEventListener('mouseup', handleMouseUp);
       };
+      
       isDragging = true;
-      startX = e.clientX - group.offsetLeft;
-      startY = e.clientY - group.offsetTop;
+      originalLeft = parseInt(group.style.left) || 0;
+      originalTop = parseInt(group.style.top) || 0;
+      startX = e.clientX - originalLeft;
+      startY = e.clientY - originalTop;
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
     }
@@ -2074,8 +2260,10 @@ const LivePresentationViewer = () => {
   // Add focused group management function
   const manageGroupData = (action, groupElement, data = {}) => {
     console.log('[DEBUG] manageGroupData called:', action, data);
+    console.log('[DEBUG] manageGroupData - groupElement:', groupElement);
     
     const groupId = groupElement.dataset.groupId;
+    console.log('[DEBUG] manageGroupData - groupId:', groupId);
     if (!groupId) {
       console.log('[DEBUG] No groupId found in element');
       return;

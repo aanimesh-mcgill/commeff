@@ -35,7 +35,7 @@ const LivePresentationViewer = () => {
   const [firestoreInitialized, setFirestoreInitialized] = useState(false);
 
   // Version tracking
-  const VERSION = "VgroupsBeingSaved";
+  const VERSION = "V1.4.10";
 
   // DEBUG LOGGING for Firestore rule troubleshooting
   useEffect(() => {
@@ -1317,9 +1317,37 @@ const LivePresentationViewer = () => {
     window.removeGroupFromUI = (groupId) => {
       const existingGroup = document.querySelector(`[data-group-id="${groupId}"]`);
       if (existingGroup) {
+        console.log('[DEBUG] Removing group from UI via Firestore listener:', groupId);
+        
+        // Get all comments in the group before removing it
+        const comments = existingGroup.querySelectorAll('li[data-id]');
+        
+        // Remove grouped state from all comments
+        comments.forEach(li => {
+          const commentId = li.dataset.id;
+          const data = commentsMap[commentId];
+          if (data) {
+            data.grouped = false;
+          }
+        });
+        
+        // Remove group from UI
         existingGroup.remove();
+        
+        // Update chat panel for all comments - remove grouped class from original comments
+        const chatList = document.getElementById("commentList");
+        comments.forEach(li => {
+          const commentId = li.dataset.id;
+          const existing = chatList.querySelector(`.comment[data-id='${commentId}']`);
+          if (existing) {
+            existing.classList.remove("grouped");
+          }
+        });
+        
+        console.log('[UI] Group removed from Firestore:', groupId);
+      } else {
+        console.log('[DEBUG] Group not found in UI for removal:', groupId);
       }
-      console.log('[UI] Group removed from Firestore:', groupId);
     };
 
     window.addLikeToUI = (likeData) => {
@@ -2011,34 +2039,39 @@ const LivePresentationViewer = () => {
       const group = el.closest('.note-box');
       const groupId = group.dataset.groupId;
       
-      // Remove from Firestore using manageGroupData
+      console.log('[DEBUG] removeGroup called for groupId:', groupId);
+      
+      // Only delete from Firestore if it's a valid Firestore-backed group
       if (groupId && !groupId.startsWith('group_')) {
+        console.log('[DEBUG] Deleting group from Firestore:', groupId);
         manageGroupData('delete', group);
+      } else {
+        console.log('[DEBUG] Removing temporary group from UI only:', groupId);
+        // For temporary groups, remove immediately from UI
+        const comments = group.querySelectorAll('li[data-id]');
+        
+        // Remove grouped state from all comments
+        comments.forEach(li => {
+          const commentId = li.dataset.id;
+          const data = commentsMap[commentId];
+          if (data) {
+            data.grouped = false;
+          }
+        });
+        
+        // Remove group from UI
+        group.remove();
+        
+        // Update chat panel for all comments - remove grouped class from original comments
+        const chatList = document.getElementById("commentList");
+        comments.forEach(li => {
+          const commentId = li.dataset.id;
+          const existing = chatList.querySelector(`.comment[data-id='${commentId}']`);
+          if (existing) {
+            existing.classList.remove("grouped");
+          }
+        });
       }
-      
-      const comments = group.querySelectorAll('li[data-id]');
-      
-      // Remove grouped state from all comments
-      comments.forEach(li => {
-        const commentId = li.dataset.id;
-        const data = commentsMap[commentId];
-        if (data) {
-          data.grouped = false;
-        }
-      });
-      
-      // Remove group
-      group.remove();
-      
-      // Update chat panel for all comments - remove grouped class from original comments
-      const chatList = document.getElementById("commentList");
-      comments.forEach(li => {
-        const commentId = li.dataset.id;
-        const existing = chatList.querySelector(`.comment[data-id='${commentId}']`);
-        if (existing) {
-          existing.classList.remove("grouped");
-        }
-      });
     }
 
     function selectAll(el) {

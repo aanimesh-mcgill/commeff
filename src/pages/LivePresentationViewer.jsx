@@ -35,7 +35,7 @@ const LivePresentationViewer = () => {
   const [firestoreInitialized, setFirestoreInitialized] = useState(false);
 
   // Version tracking
-  const VERSION = "1.4.1";
+  const VERSION = "1.4.2";
 
   // DEBUG LOGGING for Firestore rule troubleshooting
   useEffect(() => {
@@ -147,7 +147,11 @@ const LivePresentationViewer = () => {
   const addGroupToFirestore = async (groupData) => {
     try {
       const groupsRef = getGroupsCollection();
-      if (!groupsRef) return null;
+      if (!groupsRef) {
+        console.error('[Firestore] getGroupsCollection() returned null!');
+        return null;
+      }
+      if (!groupData) return null;
       
       const docRef = await addDoc(groupsRef, {
         ...groupData,
@@ -1063,55 +1067,56 @@ const LivePresentationViewer = () => {
           // Add to Firestore first
           console.log('[UI] Creating new group with data:', groupData);
           addGroupToFirestore(groupData).then(firestoreGroupId => {
-            console.log('[UI] addGroupToFirestore returned:', firestoreGroupId);
-            if (firestoreGroupId) {
-              // Create group with Firestore ID
-              const group = document.createElement("div");
-              group.className = "note-box";
-              group.dataset.groupId = firestoreGroupId;
-              group.style.left = groupData.position.x + "px";
-              group.style.top = groupData.position.y + "px";
-              
-              // Define variables for the new group
-              const hasReplies = comment.replies.length > 0;
-              const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
-              const isLiked = userLikes.has(id);
-              const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
-              
-              group.innerHTML = `
-                <div class="note-header" onmousedown="handleGroupMouseDown(event, this.closest('.note-box'))">
-                  <span contenteditable onclick="selectAll(this)">${groupData.name}</span>
-                  <span class="remove-group" onclick="removeGroup(this)">×</span>
-                </div>
-                <ul class="note-comments">
-                  <li class="grouped-comment" data-id="${id}" data-type="comment" draggable="true">
-                    <div class="comment-content">
-                      <div class="comment-text">${comment.text}</div>
-                      <div class="comment-actions">
-                        <span class="${likeClass}" onclick="like('${id}', this)">👍 ${comment.likes}</span>
-                        <button class="reply-btn" title="Reply" onclick="reply(this)">🗨️</button>
-                        <span class="remove-comment" onclick="removeFromGroup('${id}', this)">×</span>
-                        ${replyToggle}
-                      </div>
-                    </div>
-                  </li>
-                </ul>
-              `;
-              
-              const groupingArea = document.getElementById('groupingArea');
-              if (groupingArea) {
-                groupingArea.appendChild(group);
-              } else {
-                slideElement.appendChild(group);
-              }
-              // Don't remove the original comment, just mark it as grouped
-              draggedEl.classList.add('grouped');
-              comment.grouped = true;
-              
-              // Add drag event listeners
-              const li = group.querySelector("li");
-              li.addEventListener("dragstart", e => draggedEl = li);
+            if (!firestoreGroupId) {
+              console.error('[UI] Firestore group creation failed, not adding group to UI.');
+              return;
             }
+            // Create group with Firestore ID
+            const group = document.createElement("div");
+            group.className = "note-box";
+            group.dataset.groupId = firestoreGroupId;
+            group.style.left = groupData.position.x + "px";
+            group.style.top = groupData.position.y + "px";
+            
+            // Define variables for the new group
+            const hasReplies = comment.replies.length > 0;
+            const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
+            const isLiked = userLikes.has(id);
+            const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
+            
+            group.innerHTML = `
+              <div class="note-header" onmousedown="handleGroupMouseDown(event, this.closest('.note-box'))">
+                <span contenteditable onclick="selectAll(this)">${groupData.name}</span>
+                <span class="remove-group" onclick="removeGroup(this)">×</span>
+              </div>
+              <ul class="note-comments">
+                <li class="grouped-comment" data-id="${id}" data-type="comment" draggable="true">
+                  <div class="comment-content">
+                    <div class="comment-text">${comment.text}</div>
+                    <div class="comment-actions">
+                      <span class="${likeClass}" onclick="like('${id}', this)">👍 ${comment.likes}</span>
+                      <button class="reply-btn" title="Reply" onclick="reply(this)">🗨️</button>
+                      <span class="remove-comment" onclick="removeFromGroup('${id}', this)">×</span>
+                      ${replyToggle}
+                    </div>
+                  </div>
+                </li>
+              </ul>
+            `;
+            
+            const groupingArea = document.getElementById('groupingArea');
+            if (groupingArea) {
+              groupingArea.appendChild(group);
+            } else {
+              console.warn('[UI] groupingArea not found. Group not appended.');
+            }
+            // Don't remove the original comment, just mark it as grouped
+            draggedEl.classList.add('grouped');
+            comment.grouped = true;
+            
+            // Add drag event listeners
+            const li = group.querySelector("li");
+            li.addEventListener("dragstart", e => draggedEl = li);
           });
         }
       });
@@ -1162,6 +1167,9 @@ const LivePresentationViewer = () => {
 
     window.addGroupToUI = (groupData) => {
       const { id, name, position, commentIds = [] } = groupData;
+      // Remove any existing group node with this id
+      const existing = document.querySelector(`.note-box[data-group-id='${id}']`);
+      if (existing) existing.remove();
       const group = document.createElement("div");
       group.className = "note-box";
       group.dataset.groupId = id;
@@ -1373,7 +1381,11 @@ const LivePresentationViewer = () => {
               console.log('[DEBUG] toggleDiscussion: dragover event triggered on groupingArea');
               e.preventDefault();
             });
-            groupingAreaElement.addEventListener("drop", e => {
+            // Guard against multiple drop listeners
+            if (groupingAreaElement._dropListener) {
+              groupingAreaElement.removeEventListener('drop', groupingAreaElement._dropListener);
+            }
+            const dropListener = function(e) {
               console.log('[DEBUG] Drop event triggered (in toggleDiscussion)');
               alert('DROP EVENT TRIGGERED!'); // Temporary alert for debugging
               e.preventDefault();
@@ -1405,73 +1417,76 @@ const LivePresentationViewer = () => {
               // Add to Firestore first
               console.log('[UI] Creating new group with data:', groupData);
               addGroupToFirestore(groupData).then(firestoreGroupId => {
-                console.log('[UI] addGroupToFirestore returned:', firestoreGroupId);
-                if (firestoreGroupId) {
-                  // Create group with Firestore ID
-                  const group = document.createElement("div");
-                  group.className = "note-box";
-                  group.dataset.groupId = firestoreGroupId;
-                  group.style.left = groupData.position.x + "px";
-                  group.style.top = groupData.position.y + "px";
-                  group.style.width = "200px";
-                  group.style.minHeight = "100px";
-                  group.style.backgroundColor = "#fff3cd";
-                  group.style.border = "2px solid #ffc107";
-                  group.style.borderRadius = "5px";
-                  group.style.padding = "10px";
-                  group.style.cursor = "move";
-                  group.style.zIndex = "1000";
-                  
-                  const hasReplies = comment.replies.length > 0;
-                  const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
-                  const isLiked = userLikes.has(id);
-                  const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
-                  
-                  group.innerHTML = `
-                    <div class="group-header" style="font-weight: bold; margin-bottom: 10px; cursor: move;" onmousedown="handleGroupMouseDown(event, this.parentElement)">
-                      <input type="text" placeholder="Group Label" style="width: 100%; border: none; background: transparent; font-weight: bold;" onblur="manageGroupData('update_label', this.parentElement.parentElement, { label: this.value })">
-                      <span class="group-label" style="display: none;"></span>
-                      <button onclick="removeGroup(this.parentElement.parentElement)" style="float: right; background: none; border: none; cursor: pointer; color: #dc3545;">✕</button>
-                    </div>
-                    <ul style="list-style: none; padding: 0; margin: 0;">
-                      <li class="grouped-comment" draggable="true" data-id="${id}" data-type="comment">
-                        <div class="comment-content">
-                          <div class="comment-text">${comment.text}</div>
-                          <div class="comment-actions">
-                            <span class="${likeClass}" onclick="like('${id}', this)">👍 ${comment.likes}</span>
-                            <span class="reply-btn" onclick="reply(this)">Reply</span>
-                            <span class="remove-btn" onclick="removeFromGroup('${id}', this)">✕</span>
-                          </div>
-                          ${replyToggle}
-                        </div>
-                      </li>
-                    </ul>
-                  `;
-                  
-                  groupingAreaElement.appendChild(group);
-                  
-                  // Add to commentsMap
-                  commentsMap[id] = comment;
-                  
-                  // Mark as grouped
-                  if (draggedEl) {
-                    draggedEl.classList.add('grouped');
-                  }
-                  
-                  // Also mark the original comment in chat panel as grouped
-                  const chatComment = document.querySelector(`.comment[data-id='${id}']`);
-                  if (chatComment) {
-                    chatComment.classList.add('grouped');
-                  }
-                  
-                  comment.grouped = true;
-                  
-                  console.log('[DEBUG] Group created and saved to Firestore with ID:', firestoreGroupId);
+                if (!firestoreGroupId) {
+                  console.error('[UI] Firestore group creation failed, not adding group to UI.');
+                  return;
                 }
+                // Create group with Firestore ID
+                const group = document.createElement("div");
+                group.className = "note-box";
+                group.dataset.groupId = firestoreGroupId;
+                group.style.left = groupData.position.x + "px";
+                group.style.top = groupData.position.y + "px";
+                group.style.width = "200px";
+                group.style.minHeight = "100px";
+                group.style.backgroundColor = "#fff3cd";
+                group.style.border = "2px solid #ffc107";
+                group.style.borderRadius = "5px";
+                group.style.padding = "10px";
+                group.style.cursor = "move";
+                group.style.zIndex = "1000";
+                
+                const hasReplies = comment.replies.length > 0;
+                const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
+                const isLiked = userLikes.has(id);
+                const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
+                
+                group.innerHTML = `
+                  <div class="group-header" style="font-weight: bold; margin-bottom: 10px; cursor: move;" onmousedown="handleGroupMouseDown(event, this.parentElement)">
+                    <input type="text" placeholder="Group Label" style="width: 100%; border: none; background: transparent; font-weight: bold;" onblur="manageGroupData('update_label', this.parentElement.parentElement, { label: this.value })">
+                    <span class="group-label" style="display: none;"></span>
+                    <button onclick="removeGroup(this.parentElement.parentElement)" style="float: right; background: none; border: none; cursor: pointer; color: #dc3545;">✕</button>
+                  </div>
+                  <ul style="list-style: none; padding: 0; margin: 0;">
+                    <li class="grouped-comment" draggable="true" data-id="${id}" data-type="comment">
+                      <div class="comment-content">
+                        <div class="comment-text">${comment.text}</div>
+                        <div class="comment-actions">
+                          <span class="${likeClass}" onclick="like('${id}', this)">👍 ${comment.likes}</span>
+                          <span class="reply-btn" onclick="reply(this)">Reply</span>
+                          <span class="remove-btn" onclick="removeFromGroup('${id}', this)">✕</span>
+                        </div>
+                        ${replyToggle}
+                      </div>
+                    </li>
+                  </ul>
+                `;
+                
+                groupingAreaElement.appendChild(group);
+                
+                // Add to commentsMap
+                commentsMap[id] = comment;
+                
+                // Mark as grouped
+                if (draggedEl) {
+                  draggedEl.classList.add('grouped');
+                }
+                
+                // Also mark the original comment in chat panel as grouped
+                const chatComment = document.querySelector(`.comment[data-id='${id}']`);
+                if (chatComment) {
+                  chatComment.classList.add('grouped');
+                }
+                
+                comment.grouped = true;
+                
+                console.log('[DEBUG] Group created and saved to Firestore with ID:', firestoreGroupId);
               });
               
               draggedEl = null;
-            });
+            };
+            groupingAreaElement.addEventListener('drop', dropListener);
+            groupingAreaElement._dropListener = dropListener;
           }
         }, 100); // Small delay to ensure DOM is ready
       }
@@ -1864,37 +1879,30 @@ const LivePresentationViewer = () => {
     }
 
     function handleGroupMouseDown(e, group) {
-      // Prevent text selection during drag
       e.preventDefault();
-      
       let isDragging = false;
       let startX, startY;
-      
       const handleMouseMove = (e) => {
         if (isDragging) {
           const x = e.clientX - startX;
           const y = e.clientY - startY;
           group.style.left = x + 'px';
           group.style.top = y + 'px';
-          
-          // Update position in Firestore using manageGroupData
+          // Only update position, do not re-append or create new nodes
           const groupId = group.dataset.groupId;
           if (groupId && !groupId.startsWith('group_')) {
             manageGroupData('update_position', group);
           }
         }
       };
-      
       const handleMouseUp = () => {
         isDragging = false;
         document.removeEventListener('mousemove', handleMouseMove);
         document.removeEventListener('mouseup', handleMouseUp);
       };
-      
       isDragging = true;
       startX = e.clientX - group.offsetLeft;
       startY = e.clientY - group.offsetTop;
-      
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
     }

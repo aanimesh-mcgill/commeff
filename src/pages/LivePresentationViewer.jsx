@@ -35,7 +35,7 @@ const LivePresentationViewer = () => {
   const [firestoreInitialized, setFirestoreInitialized] = useState(false);
 
   // Version tracking
-  const VERSION = "V1.4.14";
+  const VERSION = "V1.4.15";
 
   // DEBUG LOGGING for Firestore rule troubleshooting
   useEffect(() => {
@@ -586,6 +586,10 @@ const LivePresentationViewer = () => {
         <div class="slide-container" id="slideContainer">
           <div class="slide" id="slideArea">
             <div class="slide-content" id="slideContent"></div>
+          </div>
+          <!-- Groups area on main presentation area -->
+          <div class="groups-area" id="groupsArea" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1000;">
+            <!-- Groups will be displayed here over the slides -->
           </div>
         </div>
         <button class="discussion-toggle-open" id="discussionToggleOpen" onclick="toggleDiscussion()">
@@ -1324,11 +1328,11 @@ const LivePresentationViewer = () => {
         </ul>
       `;
       
-      // Add to grouping area so it's visible in the discussion panel
-      const groupingArea = document.getElementById('groupingArea');
-      if (groupingArea) {
-        groupingArea.appendChild(group);
-        // console.log('[UI] Group added from Firestore to grouping area:', id);
+      // Add to groups area on main presentation area
+      const groupsArea = document.getElementById('groupsArea');
+      if (groupsArea) {
+        groupsArea.appendChild(group);
+        console.log('[UI] Group added from Firestore to groups area:', id);
         
         // Add drag event listeners to the group comments
         const groupComments = group.querySelectorAll('li[data-id]');
@@ -1339,7 +1343,7 @@ const LivePresentationViewer = () => {
           });
         });
       } else {
-        console.error('[UI] Error: groupingArea not found, cannot add group');
+        console.error('[UI] Error: groupsArea not found, cannot add group');
       }
     };
 
@@ -1348,8 +1352,8 @@ const LivePresentationViewer = () => {
       const existingGroup = document.querySelector(`[data-group-id="${id}"]`);
       if (existingGroup) {
         if (name) {
-          const nameSpan = existingGroup.querySelector('.note-header span');
-          if (nameSpan) nameSpan.textContent = name;
+          const nameInput = existingGroup.querySelector('input[type="text"]');
+          if (nameInput) nameInput.value = name;
         }
         if (position) {
           existingGroup.style.left = position.x + "px";
@@ -1552,6 +1556,12 @@ const LivePresentationViewer = () => {
                 return;
               }
               
+              // Additional prevention: check if dragged element is part of a group
+              if (draggedEl && (draggedEl.closest('.note-box') || draggedEl.classList.contains('grouped-comment'))) {
+                console.log('[DEBUG] Dragging an existing group or group element, not creating new one');
+                return;
+              }
+              
               if (!draggedEl) {
                 // console.log('[DEBUG] No draggedEl found');
                 return;
@@ -1712,7 +1722,14 @@ const LivePresentationViewer = () => {
                   </ul>
                 `;
                 
-                groupingAreaElement.appendChild(group);
+                // Add to groups area on main presentation area
+                const groupsArea = document.getElementById('groupsArea');
+                if (groupsArea) {
+                  groupsArea.appendChild(group);
+                  console.log('[UI] New group added to groups area:', firestoreGroupId);
+                } else {
+                  console.error('[UI] Error: groupsArea not found, cannot add new group');
+                }
                 
                 // Add to commentsMap
                 commentsMap[id] = comment;

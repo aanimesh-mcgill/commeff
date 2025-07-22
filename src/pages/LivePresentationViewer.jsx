@@ -35,7 +35,7 @@ const LivePresentationViewer = () => {
   const [firestoreInitialized, setFirestoreInitialized] = useState(false);
 
   // Version tracking
-  const VERSION = "V1.4.14";
+  const VERSION = "V1.4.30";
 
   // DEBUG LOGGING for Firestore rule troubleshooting
   useEffect(() => {
@@ -1053,6 +1053,16 @@ const LivePresentationViewer = () => {
   window.handleGroupMouseDown = handleGroupMouseDown;
   window.manageGroupData = manageGroupData;
   
+  // Add Firestore functions to window to avoid redeclaration issues
+  window.addCommentToFirestore = addCommentToFirestore;
+  window.addGroupToFirestore = addGroupToFirestore;
+  window.deleteCommentFromFirestore = deleteCommentFromFirestore;
+  window.deleteGroupFromFirestore = deleteGroupFromFirestore;
+  window.updateCommentInFirestore = updateCommentInFirestore;
+  window.updateGroupInFirestore = updateGroupInFirestore;
+  window.updateLikeInFirestore = updateLikeInFirestore;
+  window.getUserId = getUserId;
+  
   // Add Firestore save function to window
   window.saveGroupToFirestore = (groupData) => {
     console.log('[DEBUG] saveGroupToFirestore called with:', groupData);
@@ -1118,7 +1128,7 @@ const LivePresentationViewer = () => {
             if (!currentCommentIds.includes(id)) {
               currentCommentIds.push(id);
               console.log('[UI] Updating group in Firestore with new comment:', groupId, currentCommentIds);
-              updateGroupInFirestore(groupId, { commentIds: currentCommentIds });
+              window.updateGroupInFirestore(groupId, { commentIds: currentCommentIds });
             }
           }
           
@@ -1169,7 +1179,7 @@ const LivePresentationViewer = () => {
           // Add to Firestore first
           console.log('[UI] Creating new group with data:', groupData);
           console.log('[DEBUG] About to call addGroupToFirestore...');
-          addGroupToFirestore(groupData).then(firestoreGroupId => {
+          window.addGroupToFirestore(groupData).then(firestoreGroupId => {
             console.log('[DEBUG] addGroupToFirestore returned:', firestoreGroupId);
             if (!firestoreGroupId) {
               console.error('[UI] Firestore group creation failed, not adding group to UI.');
@@ -1613,7 +1623,7 @@ const LivePresentationViewer = () => {
                   if (!currentCommentIds.includes(id)) {
                     currentCommentIds.push(id);
                     console.log('[Firestore] Updating group with new comment:', groupId, currentCommentIds);
-                    updateGroupInFirestore(groupId, { commentIds: currentCommentIds });
+                    window.updateGroupInFirestore(groupId, { commentIds: currentCommentIds });
                   }
                 }
                 
@@ -1666,7 +1676,7 @@ const LivePresentationViewer = () => {
               
               // Add to Firestore first
               console.log('[Firestore] Creating new group:', groupData);
-              addGroupToFirestore(groupData).then(firestoreGroupId => {
+              window.addGroupToFirestore(groupData).then(firestoreGroupId => {
                 if (!firestoreGroupId) {
                   console.error('[Firestore] Group creation failed, not adding to UI.');
                   return;
@@ -1823,7 +1833,7 @@ const LivePresentationViewer = () => {
       }
       
       // Update Firestore
-      updateLikeInFirestore(id, 'comment', !isLiked);
+      window.updateLikeInFirestore(id, 'comment', !isLiked);
       
       // Update all instances of this comment (chat panel and groups)
       updateCommentLikes(id, commentsMap[id].likes);
@@ -1846,7 +1856,7 @@ const LivePresentationViewer = () => {
           commentsMap[id].replyLikes.push(0);
           
           // Update Firestore
-          updateCommentInFirestore(id, {
+          window.updateCommentInFirestore(id, {
             replies: commentsMap[id].replies,
             replyLikes: commentsMap[id].replyLikes
           });
@@ -1886,7 +1896,7 @@ const LivePresentationViewer = () => {
       delete commentsMap[commentId];
       
       // Remove from Firestore
-      deleteCommentFromFirestore(commentId);
+      window.deleteCommentFromFirestore(commentId);
     }
 
     function addComment() {
@@ -1906,7 +1916,7 @@ const LivePresentationViewer = () => {
       };
       
       // Add to Firestore - the Firestore listener will handle adding to UI
-      addCommentToFirestore(commentData).then(firestoreId => {
+      window.addCommentToFirestore(commentData).then(firestoreId => {
         if (firestoreId) {
           console.log('[UI] Comment sent to Firestore with ID:', firestoreId);
         } else {
@@ -1937,7 +1947,7 @@ const LivePresentationViewer = () => {
       }
       
       // Update Firestore
-      updateLikeInFirestore(replyId, 'reply', !isLiked);
+      window.updateLikeInFirestore(replyId, 'reply', !isLiked);
       
       // Update all instances of this reply
       updateReplyLikes(id, index, commentsMap[id].replyLikes[index]);
@@ -2164,7 +2174,7 @@ const LivePresentationViewer = () => {
               y: parseInt(group.style.top) || 0
             };
             console.log('[Firestore] Updating group position:', groupId, finalPosition);
-            updateGroupInFirestore(groupId, { position: finalPosition });
+            window.updateGroupInFirestore(groupId, { position: finalPosition });
           }
         }
         
@@ -2346,7 +2356,7 @@ const LivePresentationViewer = () => {
 
     // Initial slide display
     updateSlideDisplay();
-  }, [presentation, slides, addCommentToFirestore, addGroupToFirestore, deleteCommentFromFirestore, deleteGroupFromFirestore, getUserId, updateCommentInFirestore, updateGroupInFirestore, updateLikeInFirestore]);
+  }, [presentation, slides]);
 
   // Add focused group management function
   const manageGroupData = (action, groupElement, data = {}) => {
@@ -2374,7 +2384,7 @@ const LivePresentationViewer = () => {
       case 'update_label':
         const newLabel = data.label || 'New Group';
         console.log('[Firestore] Updating group label:', groupId, newLabel);
-        updateGroupInFirestore(groupId, { name: newLabel });
+        window.updateGroupInFirestore(groupId, { name: newLabel });
         break;
         
       case 'update_position':
@@ -2383,7 +2393,7 @@ const LivePresentationViewer = () => {
           y: parseInt(groupElement.style.top) || 0
         };
         console.log('[Firestore] Updating group position:', groupId, position);
-        updateGroupInFirestore(groupId, { position });
+        window.updateGroupInFirestore(groupId, { position });
         break;
         
       case 'add_comment':
@@ -2398,7 +2408,7 @@ const LivePresentationViewer = () => {
           if (!currentCommentIds.includes(commentId)) {
             currentCommentIds.push(commentId);
             console.log('[Firestore] Adding comment to group:', groupId, commentId);
-            updateGroupInFirestore(groupId, { commentIds: currentCommentIds });
+            window.updateGroupInFirestore(groupId, { commentIds: currentCommentIds });
           }
         }
         break;
@@ -2412,14 +2422,14 @@ const LivePresentationViewer = () => {
             .filter(id => id && id !== groupId && id !== commentIdToRemove);
           
           console.log('[Firestore] Removing comment from group:', groupId, commentIdToRemove);
-          updateGroupInFirestore(groupId, { commentIds: currentCommentIds });
+          window.updateGroupInFirestore(groupId, { commentIds: currentCommentIds });
         }
         break;
         
       case 'delete':
         console.log('[Firestore] Deleting group:', groupId);
         // Don't pass the element since it's already removed from UI
-        deleteGroupFromFirestore(groupId);
+        window.deleteGroupFromFirestore(groupId);
         break;
         
       default:

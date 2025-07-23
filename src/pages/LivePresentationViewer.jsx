@@ -35,7 +35,7 @@ const LivePresentationViewer = () => {
   const [firestoreInitialized, setFirestoreInitialized] = useState(false);
 
   // Version tracking
-  const VERSION = "V1.4.30";
+  const VERSION = "V1.4.32";
 
   // DEBUG LOGGING for Firestore rule troubleshooting
   useEffect(() => {
@@ -471,16 +471,11 @@ const LivePresentationViewer = () => {
         // Store groups data to load after comments are ready
         const groupsToLoad = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
         
-        // If comments are already loaded, load groups immediately
-        if (commentsLoaded) {
-          groupsToLoad.forEach((groupData) => {
-            console.log('[Firestore] Loading existing group:', groupData);
-            window.addGroupToUI(groupData);
-          });
-        } else {
-          // Store groups to load when comments are ready
-          window.pendingGroups = groupsToLoad;
-        }
+        // Load groups immediately - don't wait for comments
+        groupsToLoad.forEach((groupData) => {
+          console.log('[Firestore] Loading existing group:', groupData);
+          window.addGroupToUI(groupData);
+        });
         
         setGroupsLoaded(true);
         return;
@@ -1971,101 +1966,8 @@ const LivePresentationViewer = () => {
       }
     });
 
-    // Add drop event handler for grouping area
-    if (groupingArea) {
-      groupingArea.addEventListener("drop", e => {
-        e.preventDefault();
-        if (!draggedEl) return;
-
-        const id = draggedEl.dataset.id || draggedEl.closest("li")?.dataset.id;
-        if (!id) return;
-
-        const comment = commentsMap[id];
-
-        const targetGroup = Array.from(groupingArea.querySelectorAll(".note-box")).find(g => {
-          const rect = g.getBoundingClientRect();
-          return e.clientX > rect.left && e.clientX < rect.right &&
-                 e.clientY > rect.top && e.clientY < rect.bottom;
-        });
-
-        if (targetGroup) {
-          // Move to another group
-          const ul = targetGroup.querySelector("ul");
-          const li = document.createElement("li");
-          li.className = "grouped-comment";
-          li.draggable = true;
-          li.dataset.id = id;
-          li.dataset.type = "comment";
-          li.addEventListener("dragstart", e => draggedEl = li);
-          
-          const hasReplies = comment.replies.length > 0;
-          const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
-          const isLiked = userLikes.has(id);
-          const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
-          
-          li.innerHTML = `
-            <div class="comment-content">
-              <div class="comment-text">${comment.text}</div>
-              <div class="comment-actions">
-                <span class="${likeClass}" onclick="like('${id}', this)">👍 ${comment.likes}</span>
-                <button class="reply-btn" title="Reply" onclick="reply(this)">🗨️</button>
-                <span class="remove-comment" onclick="removeFromGroup('${id}', this)">×</span>
-                ${replyToggle}
-              </div>
-            </div>
-          `;
-          
-          ul.appendChild(li);
-          // Don't remove the original comment, just mark it as grouped
-          draggedEl.classList.add('grouped');
-          comment.grouped = true;
-          updateGroupLikes(targetGroup);
-          updateGroupReplies(id);
-        } else {
-          // Create new group
-          const groupId = "group_" + Math.random().toString(36).substr(2, 9);
-          const group = document.createElement("div");
-          group.className = "note-box";
-          group.style.left = (e.clientX - 120) + "px";
-          group.style.top = (e.clientY - 60) + "px";
-          
-          // Define variables for the new group
-          const hasReplies = comment.replies.length > 0;
-          const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
-          const isLiked = userLikes.has(id);
-          const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
-          
-          group.innerHTML = `
-            <div class="note-header" onmousedown="handleGroupMouseDown(event, this.closest('.note-box'))">
-              <span contenteditable onclick="selectAll(this)">New Group</span>
-              <span class="remove-group" onclick="removeGroup(this)">×</span>
-            </div>
-            <ul class="note-comments">
-              <li class="grouped-comment" data-id="${id}" data-type="comment" draggable="true">
-                <div class="comment-content">
-                  <div class="comment-text">${comment.text}</div>
-                  <div class="comment-actions">
-                    <span class="${likeClass}" onclick="like('${id}', this)">👍 ${comment.likes}</span>
-                    <button class="reply-btn" title="Reply" onclick="reply(this)">🗨️</button>
-                    <span class="remove-comment" onclick="removeFromGroup('${id}', this)">×</span>
-                    ${replyToggle}
-                  </div>
-                </div>
-              </li>
-            </ul>
-          `;
-          
-          groupingArea.appendChild(group);
-          // Don't remove the original comment, just mark it as grouped
-          draggedEl.classList.add('grouped');
-          comment.grouped = true;
-          
-          // Add drag event listeners
-          const li = group.querySelector("li");
-          li.addEventListener("dragstart", e => draggedEl = li);
-        }
-      });
-    }
+    // REMOVED: Duplicate drop event handler to prevent double group creation
+    // The drop event listener is now only in toggleDiscussion function
 
     function removeFromGroup(commentId, el) {
       const li = el.closest('li');

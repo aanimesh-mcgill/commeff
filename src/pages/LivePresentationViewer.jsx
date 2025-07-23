@@ -35,7 +35,10 @@ const LivePresentationViewer = () => {
   const [firestoreInitialized, setFirestoreInitialized] = useState(false);
 
   // Version tracking
-  const VERSION = "V1.4.32";
+  const VERSION = "V1.4.35";
+  
+  // Track groups being deleted to prevent re-adding from Firestore
+  const groupsBeingDeleted = new Set();
 
   // DEBUG LOGGING for Firestore rule troubleshooting
   useEffect(() => {
@@ -210,15 +213,41 @@ const LivePresentationViewer = () => {
 
   const deleteGroupFromFirestore = async (groupId) => {
     try {
+      // Add to deletion tracking to prevent re-adding from Firestore listener
+      groupsBeingDeleted.add(groupId);
+      console.log('[DEBUG] Added group to deletion tracking:', groupId);
+      
       const groupsRef = getGroupsCollection();
-      if (!groupsRef) return;
+      if (!groupsRef) {
+        console.error('[Firestore] getGroupsCollection() returned null for deletion!');
+        return;
+      }
       
       const groupDoc = doc(groupsRef, groupId);
+      console.log('[DEBUG] Deleting group document:', groupDoc.path);
+      
+      // Check if the group exists before trying to delete it
+      const groupSnap = await getDoc(groupDoc);
+      if (!groupSnap.exists()) {
+        console.log('[DEBUG] Group does not exist in Firestore, skipping deletion:', groupId);
+        groupsBeingDeleted.delete(groupId);
+        return;
+      }
+      
       await deleteDoc(groupDoc);
       
-      console.log('[Firestore] Group deleted:', groupId);
+      console.log('[Firestore] Group deleted from Firestore:', groupId);
+      
+      // Remove from deletion tracking after a longer delay to ensure Firestore listener processes
+      setTimeout(() => {
+        groupsBeingDeleted.delete(groupId);
+        console.log('[DEBUG] Removed group from deletion tracking:', groupId);
+      }, 5000);
     } catch (error) {
       console.error('[Firestore] Error deleting group:', error);
+      console.error('[Firestore] Error details:', error.code, error.message);
+      // Remove from deletion tracking on error
+      groupsBeingDeleted.delete(groupId);
     }
   };
 
@@ -472,7 +501,13 @@ const LivePresentationViewer = () => {
         const groupsToLoad = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
         
         // Load groups immediately - don't wait for comments
+        console.log('[DEBUG] Groups being deleted:', Array.from(groupsBeingDeleted));
         groupsToLoad.forEach((groupData) => {
+          // Skip if group is being deleted
+          if (groupsBeingDeleted.has(groupData.id)) {
+            console.log('[DEBUG] Skipping group load - group is being deleted:', groupData.id);
+            return;
+          }
           console.log('[Firestore] Loading existing group:', groupData);
           window.addGroupToUI(groupData);
         });
@@ -491,6 +526,12 @@ const LivePresentationViewer = () => {
           docPath: change.doc.ref.path,
           data: change.doc.data()
         });
+        
+        // Skip if group is being deleted
+        if (groupsBeingDeleted.has(groupData.id)) {
+          console.log('[DEBUG] Skipping group change - group is being deleted:', groupData.id, 'Change type:', change.type);
+          return;
+        }
         
         if (change.type === 'added') {
           // Add new group to UI
@@ -1398,6 +1439,10 @@ const LivePresentationViewer = () => {
       } else {
         console.log('[DEBUG] Group not found in UI for removal:', groupId);
       }
+      
+      // Remove from deletion tracking since it's been handled
+      groupsBeingDeleted.delete(groupId);
+      console.log('[DEBUG] Removed group from deletion tracking after UI removal:', groupId);
     };
 
     window.addLikeToUI = (likeData) => {
@@ -2003,6 +2048,12 @@ const LivePresentationViewer = () => {
       
       console.log('[DEBUG] removeGroup called for groupId:', groupId);
       
+      // Add to deletion tracking immediately
+      if (groupId && !groupId.startsWith('group_')) {
+        groupsBeingDeleted.add(groupId);
+        console.log('[DEBUG] Added group to deletion tracking in removeGroup:', groupId);
+      }
+      
       // Get all comments in the group before removing it
       const comments = group.querySelectorAll('li[data-id]');
       
@@ -2272,7 +2323,8 @@ const LivePresentationViewer = () => {
     }
     
     // Check if the group element still exists in DOM (prevents operations on deleted groups)
-    if (!groupElement.isConnected) {
+    // But allow delete operations even if element is not connected
+    if (!groupElement.isConnected && action !== 'delete') {
       // console.log('[DEBUG] Group element no longer in DOM, skipping operation:', groupId);
       return;
     }
@@ -2330,7 +2382,7 @@ const LivePresentationViewer = () => {
         
       case 'delete':
         console.log('[Firestore] Deleting group:', groupId);
-        // Don't pass the element since it's already removed from UI
+        // For delete action, don't check if element is connected since it's already removed from UI
         window.deleteGroupFromFirestore(groupId);
         break;
         

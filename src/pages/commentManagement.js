@@ -15,7 +15,7 @@ export function createCommentEl(text) {
     <div class="comment-content">
       <div class="comment-text">${text}</div>
       <div class="comment-actions">
-        <button class="like-btn" onclick="like('${id}', this)">👍 0</button>
+        <button class="like-btn" onclick="like('${id}', this)">🤍 0</button>
         <button class="reply-btn" onclick="reply(this)">🗨️</button>
         <button class="remove-btn" onclick="removeComment('${id}', this)">❌</button>
       </div>
@@ -31,25 +31,34 @@ export function renderComment(id) {
   el.className = "comment";
   el.dataset.id = id;
   
-  const repliesHtml = data.replies.map((reply, index) => `
-    <div class="reply">
-      <div class="reply-text">${reply}</div>
-      <div class="reply-actions">
-        <button class="like-btn" onclick="likeReply('${id}', ${index}, this)">👍 ${data.replyLikes[index] || 0}</button>
-        <button class="remove-btn" onclick="removeReply('${id}', ${index}, this)">❌</button>
+  // Determine like state and icon
+  const isLiked = userLikes.has(id);
+  const likeIcon = isLiked ? '❤️' : '🤍';
+  
+  const repliesHtml = data.replies.map((reply, index) => {
+    const replyId = `${id}_reply_${index}`;
+    const isReplyLiked = userLikes.has(replyId);
+    const replyLikeIcon = isReplyLiked ? '❤️' : '🤍';
+    return `
+      <div class="reply">
+        <div class="reply-text">${reply}</div>
+        <div class="reply-actions">
+          <button class="like-btn ${isReplyLiked ? 'liked' : ''}" onclick="likeReply('${id}', ${index}, this)">${replyLikeIcon} ${data.replyLikes[index] || 0}</button>
+          <button class="remove-btn" onclick="removeReply('${id}', ${index}, this)">❌</button>
+        </div>
       </div>
-    </div>
-  `).join('');
+    `;
+  }).join('');
   
   el.innerHTML = `
     <div class="comment-content">
       <div class="comment-text">${data.text}</div>
       <div class="comment-actions">
-        <button class="like-btn" onclick="like('${id}', this)">👍 ${data.likes}</button>
+        <button class="like-btn ${isLiked ? 'liked' : ''}" onclick="like('${id}', this)">${likeIcon} ${data.likes || 0}</button>
         <button class="reply-btn" onclick="reply(this)">🗨️</button>
         <button class="remove-btn" onclick="removeComment('${id}', this)">❌</button>
+        ${data.replies.length > 0 ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : ''}
       </div>
-      ${data.replies.length > 0 ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : ''}
     </div>
     <div class="replies-container" style="display: none;">
       ${repliesHtml}
@@ -63,20 +72,53 @@ export function like(id, el) {
   if (!comment) return;
   
   const isLiked = userLikes.has(id);
+  
+  // Toggle like state for current user
   if (isLiked) {
-    comment.likes--;
     userLikes.delete(id);
   } else {
-    comment.likes++;
     userLikes.add(id);
   }
   
-  // Update Firestore
-  window.updateLikeInFirestore(id, comment.likes);
+  // Update Firestore with the new like state
+  window.updateLikeInFirestore(id, 'comment', !isLiked);
   
-  // Update UI
-  window.updateCommentLikes(id, comment.likes);
+  // Update UI to reflect the new state
+  updateCommentLikeUI(id, el, !isLiked);
   window.updateAllGroupLikes();
+}
+
+// Helper function to update comment like UI
+function updateCommentLikeUI(commentId, el, isLiked) {
+  const comment = commentsMap[commentId];
+  if (!comment) return;
+  
+  // Update the like button appearance
+  const likeBtn = el || document.querySelector(`.comment[data-id='${commentId}'] .like-btn`);
+  if (likeBtn) {
+    // Change icon based on like state
+    const icon = isLiked ? '❤️' : '🤍';
+    likeBtn.innerHTML = `${icon} ${comment.likes || 0}`;
+    
+    // Add/remove liked class for styling
+    if (isLiked) {
+      likeBtn.classList.add('liked');
+    } else {
+      likeBtn.classList.remove('liked');
+    }
+  }
+  
+  // Update all instances of this comment (chat and groups)
+  const allLikeBtns = document.querySelectorAll(`[data-id='${commentId}'] .like-btn`);
+  allLikeBtns.forEach(btn => {
+    const icon = isLiked ? '❤️' : '🤍';
+    btn.innerHTML = `${icon} ${comment.likes || 0}`;
+    if (isLiked) {
+      btn.classList.add('liked');
+    } else {
+      btn.classList.remove('liked');
+    }
+  });
 }
 
 export function reply(btn) {
@@ -164,19 +206,51 @@ export function likeReply(id, index, el) {
   const replyId = `${id}_reply_${index}`;
   const isLiked = userLikes.has(replyId);
   
+  // Toggle like state for current user
   if (isLiked) {
-    comment.replyLikes[index] = (comment.replyLikes[index] || 1) - 1;
     userLikes.delete(replyId);
   } else {
-    comment.replyLikes[index] = (comment.replyLikes[index] || 0) + 1;
     userLikes.add(replyId);
   }
   
-  // Update Firestore
-  window.updateLikeInFirestore(id, comment.likes, index, comment.replyLikes[index]);
+  // Update Firestore with the new like state
+  window.updateLikeInFirestore(replyId, 'reply', !isLiked);
   
-  // Update UI
-  window.updateReplyLikes(id, index, comment.replyLikes[index]);
+  // Update UI to reflect the new state
+  updateReplyLikeUI(id, index, el, !isLiked);
+}
+
+// Helper function to update reply like UI
+function updateReplyLikeUI(commentId, replyIndex, el, isLiked) {
+  const comment = commentsMap[commentId];
+  if (!comment) return;
+  
+  // Update the like button appearance
+  const likeBtn = el || document.querySelector(`[data-id='${commentId}'] .reply:nth-child(${replyIndex + 1}) .like-btn`);
+  if (likeBtn) {
+    // Change icon based on like state
+    const icon = isLiked ? '❤️' : '🤍';
+    likeBtn.innerHTML = `${icon} ${comment.replyLikes[replyIndex] || 0}`;
+    
+    // Add/remove liked class for styling
+    if (isLiked) {
+      likeBtn.classList.add('liked');
+    } else {
+      likeBtn.classList.remove('liked');
+    }
+  }
+  
+  // Update all instances of this reply (chat and groups)
+  const allReplyLikeBtns = document.querySelectorAll(`[data-id='${commentId}'] .reply:nth-child(${replyIndex + 1}) .like-btn`);
+  allReplyLikeBtns.forEach(btn => {
+    const icon = isLiked ? '❤️' : '🤍';
+    btn.innerHTML = `${icon} ${comment.replyLikes[replyIndex] || 0}`;
+    if (isLiked) {
+      btn.classList.add('liked');
+    } else {
+      btn.classList.remove('liked');
+    }
+  });
 }
 
 export function removeFromGroup(commentId, el) {
@@ -202,32 +276,70 @@ export function removeFromGroup(commentId, el) {
 }
 
 export function updateCommentLikes(commentId, likeCount) {
+  const comment = commentsMap[commentId];
+  if (!comment) return;
+  
+  // Update the like count in the data
+  comment.likes = likeCount;
+  
+  // Determine like state and icon
+  const isLiked = userLikes.has(commentId);
+  const likeIcon = isLiked ? '❤️' : '🤍';
+  
   // Update chat comment likes
   const chatComment = document.querySelector(`.comment[data-id='${commentId}'] .like-btn`);
   if (chatComment) {
-    chatComment.textContent = `👍 ${likeCount}`;
+    chatComment.innerHTML = `${likeIcon} ${likeCount}`;
+    if (isLiked) {
+      chatComment.classList.add('liked');
+    } else {
+      chatComment.classList.remove('liked');
+    }
   }
   
   // Update group comment likes
   const groupComments = document.querySelectorAll(`.note-box li[data-id='${commentId}'] .like-btn`);
   groupComments.forEach(btn => {
-    btn.textContent = `👍 ${likeCount}`;
+    btn.innerHTML = `${likeIcon} ${likeCount}`;
+    if (isLiked) {
+      btn.classList.add('liked');
+    } else {
+      btn.classList.remove('liked');
+    }
   });
 }
 
 export function updateReplyLikes(commentId, replyIndex, likeCount) {
+  const comment = commentsMap[commentId];
+  if (!comment) return;
+  
+  // Update the like count in the data
+  comment.replyLikes[replyIndex] = likeCount;
+  
   const replyId = `${commentId}_reply_${replyIndex}`;
+  const isLiked = userLikes.has(replyId);
+  const likeIcon = isLiked ? '❤️' : '🤍';
   
   // Update chat reply likes
   const chatReplies = document.querySelectorAll(`.comment[data-id='${commentId}'] .reply:nth-child(${replyIndex + 1}) .like-btn`);
   chatReplies.forEach(btn => {
-    btn.textContent = `👍 ${likeCount}`;
+    btn.innerHTML = `${likeIcon} ${likeCount}`;
+    if (isLiked) {
+      btn.classList.add('liked');
+    } else {
+      btn.classList.remove('liked');
+    }
   });
   
   // Update group reply likes
   const groupReplies = document.querySelectorAll(`.note-box li[data-id='${commentId}'] .reply:nth-child(${replyIndex + 1}) .like-btn`);
   groupReplies.forEach(btn => {
-    btn.textContent = `👍 ${likeCount}`;
+    btn.innerHTML = `${likeIcon} ${likeCount}`;
+    if (isLiked) {
+      btn.classList.add('liked');
+    } else {
+      btn.classList.remove('liked');
+    }
   });
 }
 
@@ -325,4 +437,39 @@ export function initializeCommentManagement(initialCommentsMap, initialCommentId
   commentsMap = initialCommentsMap;
   commentId = initialCommentId;
   userLikes = initialUserLikes;
+}
+
+// Sync user likes from Firestore
+export function syncUserLikesFromFirestore(likesData) {
+  // Clear current user likes
+  userLikes.clear();
+  
+  // Add likes from Firestore data
+  if (likesData && Array.isArray(likesData)) {
+    likesData.forEach(likeDoc => {
+      const { targetId, userId: likeUserId } = likeDoc;
+      const currentUserId = window.getUserId();
+      
+      // Only add if this is the current user's like
+      if (likeUserId === currentUserId) {
+        userLikes.add(targetId);
+      }
+    });
+  }
+  
+  // Update all UI elements to reflect the new like states
+  Object.keys(commentsMap).forEach(commentId => {
+    const isLiked = userLikes.has(commentId);
+    updateCommentLikeUI(commentId, null, isLiked);
+    
+    // Update reply likes
+    const comment = commentsMap[commentId];
+    if (comment && comment.replies) {
+      comment.replies.forEach((reply, index) => {
+        const replyId = `${commentId}_reply_${index}`;
+        const isReplyLiked = userLikes.has(replyId);
+        updateReplyLikeUI(commentId, index, null, isReplyLiked);
+      });
+    }
+  });
 } 

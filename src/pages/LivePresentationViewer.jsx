@@ -37,7 +37,7 @@ const LivePresentationViewer = () => {
   const [firestoreInitialized, setFirestoreInitialized] = useState(false);
 
   // Version tracking
-  const VERSION = "V1.4.78";
+  const VERSION = "V1.4.79";
   
   // Track groups being deleted to prevent re-adding from Firestore
   const groupsBeingDeleted = new Set();
@@ -1115,6 +1115,8 @@ const LivePresentationViewer = () => {
   window.cancelReply = CommentManagement.cancelReply;
   window.removeReply = CommentManagement.removeReply;
   window.syncUserLikesFromFirestore = CommentManagement.syncUserLikesFromFirestore;
+  window.addLikeToUI = CommentManagement.addLikeToUI;
+  window.removeLikeFromUI = CommentManagement.removeLikeFromUI;
   
   // Add comment management UI update functions to window
   window.updateCommentLikes = updateCommentLikes;

@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { onSnapshot, doc, collection, query, orderBy, updateDoc, getDoc, addDoc, deleteDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase/config';
+import './LivePresentationViewer.css';
 
 // Utility to get or generate a stable anonId for anonymous users
 function getAnonId() {

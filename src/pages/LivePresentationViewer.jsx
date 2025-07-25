@@ -37,7 +37,7 @@ const LivePresentationViewer = () => {
   const [firestoreInitialized, setFirestoreInitialized] = useState(false);
 
   // Version tracking
-  const VERSION = "V1.4.77";
+  const VERSION = "V1.4.78";
   
   // Track groups being deleted to prevent re-adding from Firestore
   const groupsBeingDeleted = new Set();

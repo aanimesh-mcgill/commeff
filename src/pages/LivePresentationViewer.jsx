@@ -1,10 +1,11 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { onSnapshot, doc, collection, query, orderBy, updateDoc, getDoc, addDoc, deleteDoc, setDoc } from 'firebase/firestore';
+import { onSnapshot, doc, collection, query, orderBy, updateDoc, getDoc, addDoc, deleteDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import './LivePresentationViewer.css';
 import * as CommentManagement from './commentManagement.js';
+import { initVanillaJS } from './vanillaJSInitializer.js';
 
 // Utility to get or generate a stable anonId for anonymous users
 function getAnonId() {
@@ -37,7 +38,7 @@ const LivePresentationViewer = () => {
   const [firestoreInitialized, setFirestoreInitialized] = useState(false);
 
   // Version tracking
-  const VERSION = "V1.4.79";
+  const VERSION = "V1.6.9";
   
   // Track groups being deleted to prevent re-adding from Firestore
   const groupsBeingDeleted = new Set();
@@ -73,208 +74,253 @@ const LivePresentationViewer = () => {
   };
 
   const getCommentsCollection = useCallback(() => {
-    if (!courseId || !presentationId) return null;
-    return collection(db, 'courses', courseId, 'presentations', presentationId, 'comments');
-  }, [courseId, presentationId]);
+    console.log('[DEBUG] getCommentsCollection called with globals:', {
+      courseId: window.courseId,
+      presentationId: window.presentationId,
+      currentSlideIndex: window.currentSlideIndex
+    });
+    if (!window.courseId || !window.presentationId || window.currentSlideIndex === undefined || window.currentSlideIndex === null) {
+      console.log('[DEBUG] getCommentsCollection returning null - missing globals');
+      return null;
+    }
+    const slideRef = doc(db, 'courses', window.courseId, 'presentations', window.presentationId, 'slides', window.currentSlideIndex.toString());
+    return collection(slideRef, 'comments');
+  }, []);
 
   const getGroupsCollection = useCallback(() => {
-    if (!courseId || !presentationId) return null;
-    return collection(db, 'courses', courseId, 'presentations', presentationId, 'groups');
-  }, [courseId, presentationId]);
+    console.log('[DEBUG] getGroupsCollection called with globals:', {
+      courseId: window.courseId,
+      presentationId: window.presentationId,
+      currentSlideIndex: window.currentSlideIndex
+    });
+    if (!window.courseId || !window.presentationId || window.currentSlideIndex === undefined || window.currentSlideIndex === null) {
+      console.log('[DEBUG] getGroupsCollection returning null - missing globals');
+      return null;
+    }
+    const slideRef = doc(db, 'courses', window.courseId, 'presentations', window.presentationId, 'slides', window.currentSlideIndex.toString());
+    return collection(slideRef, 'groups');
+  }, []);
 
   const getLikesCollection = useCallback(() => {
-    if (!courseId || !presentationId) return null;
-    return collection(db, 'courses', courseId, 'presentations', presentationId, 'likes');
-  }, [courseId, presentationId]);
+    if (!window.courseId || !window.presentationId) return null;
+    return collection(db, 'courses', window.courseId, 'presentations', window.presentationId, 'likes');
+  }, []);
 
-  // Firestore operations
+  // Firestore functions for the new hierarchical structure
   const addCommentToFirestore = async (commentData) => {
     try {
-      const commentsRef = getCommentsCollection();
-      if (!commentsRef) {
-        console.error('[Firestore] Comments collection is null - courseId:', courseId, 'presentationId:', presentationId);
+      if (window.currentSlideIndex === undefined || window.currentSlideIndex === null) {
+        console.error('[Firestore] No current slide index available');
+        console.error('[Firestore] Presentation object:', presentation);
+        console.error('[Firestore] Presentation keys:', presentation ? Object.keys(presentation) : 'null');
+        console.error('[Firestore] currentSlideIndex value:', window.currentSlideIndex);
         return null;
       }
       
-      const userId = getUserId();
-      const userName = currentUser?.displayName || username || 'Anonymous';
+      const slideRef = doc(db, 'courses', window.courseId, 'presentations', window.presentationId, 'slides', window.currentSlideIndex.toString());
+      const commentsRef = collection(slideRef, 'comments');
       
-      console.log('[Firestore] Adding comment to collection:', commentsRef.path);
-      console.log('[Firestore] Comment data:', { ...commentData, userId, userName });
-      
-      const docRef = await addDoc(commentsRef, {
+      const commentDoc = {
         ...commentData,
-        createdAt: new Date(),
-        userId: userId,
-        userName: userName
-      });
+        timestamp: serverTimestamp(),
+        slideIndex: window.currentSlideIndex
+      };
       
-      console.log('[Firestore] Comment successfully added with ID:', docRef.id);
+      console.log('=== COMMENT ADDITION DETAILS ===');
+      console.log('[Firestore] Current Slide Index:', window.currentSlideIndex);
+      console.log('[Firestore] Comment Text:', commentData.text);
+      console.log('[Firestore] Initial Likes:', commentData.likes || 0);
+      console.log('[Firestore] Firestore Path:', `courses/${window.courseId}/presentations/${window.presentationId}/slides/${window.currentSlideIndex}/comments`);
+      console.log('[Firestore] Full Comment Data:', JSON.stringify(commentDoc, null, 2));
+      
+      const docRef = await addDoc(commentsRef, commentDoc);
+      
+      console.log('[Firestore] ✅ Comment Successfully Added!');
+      console.log('[Firestore] Comment ID:', docRef.id);
+      console.log('[Firestore] Slide Index:', window.currentSlideIndex);
+      console.log('[Firestore] Total Likes:', commentData.likes || 0);
+      console.log('=== END COMMENT ADDITION ===');
+      
       return docRef.id;
     } catch (error) {
-      console.error('[Firestore] Error adding comment:', error);
-      console.error('[Firestore] Error details:', error.code, error.message);
+      console.error('[Firestore] ❌ Error adding comment:', error);
+      console.error('[Firestore] Failed Slide Index:', window.currentSlideIndex);
       return null;
     }
   };
 
-  const updateCommentInFirestore = async (commentId, updates) => {
+  const addGroupToFirestore = async (groupData) => {
     try {
-      const commentsRef = getCommentsCollection();
-      if (!commentsRef) return;
+      if (window.currentSlideIndex === undefined || window.currentSlideIndex === null) {
+        console.error('[Firestore] No current slide index available');
+        return null;
+      }
+      const slideRef = doc(db, 'courses', window.courseId, 'presentations', window.presentationId, 'slides', window.currentSlideIndex.toString());
+      const groupsRef = collection(slideRef, 'groups');
       
-      const commentDoc = doc(commentsRef, commentId);
-      await updateDoc(commentDoc, {
-        ...updates,
-        updatedAt: new Date()
-      });
+      const groupDoc = {
+        ...groupData,
+        timestamp: serverTimestamp(),
+        slideIndex: window.currentSlideIndex
+      };
       
-      console.log('[Firestore] Comment updated:', commentId, updates);
+      console.log('[Firestore] Sending group data to Firestore:', JSON.stringify(groupDoc, null, 2));
+      
+      const docRef = await addDoc(groupsRef, groupDoc);
+      console.log('[Firestore] Group added with ID:', docRef.id);
+      return docRef.id;
     } catch (error) {
-      console.error('[Firestore] Error updating comment:', error);
+      console.error('[Firestore] Error adding group:', error);
+      return null;
     }
   };
 
   const deleteCommentFromFirestore = async (commentId) => {
     try {
-      const commentsRef = getCommentsCollection();
-      if (!commentsRef) return;
-      
-      const commentDoc = doc(commentsRef, commentId);
-      await deleteDoc(commentDoc);
-      
+      if (window.currentSlideIndex === undefined || window.currentSlideIndex === null) {
+        console.error('[Firestore] No current slide index available');
+        return;
+      }
+      const commentRef = doc(db, 'courses', window.courseId, 'presentations', window.presentationId, 'slides', window.currentSlideIndex.toString(), 'comments', commentId);
+      await deleteDoc(commentRef);
       console.log('[Firestore] Comment deleted:', commentId);
     } catch (error) {
       console.error('[Firestore] Error deleting comment:', error);
     }
   };
 
-  const addGroupToFirestore = async (groupData) => {
-    console.log('[DEBUG] addGroupToFirestore called with:', groupData);
+  const deleteGroupFromFirestore = async (groupId) => {
     try {
-      const groupsRef = getGroupsCollection();
-      console.log('[DEBUG] groupsRef path:', groupsRef?.path);
-      if (!groupsRef) {
-        console.error('[Firestore] getGroupsCollection() returned null!');
-        return null;
+      if (window.currentSlideIndex === undefined || window.currentSlideIndex === null) {
+        console.error('[Firestore] No current slide index available');
+        return;
       }
-      if (!groupData) return null;
-      
-      const groupDataWithMetadata = {
-        ...groupData,
-        createdAt: new Date(),
-        createdBy: getUserId()
-      };
-      console.log('[DEBUG] Group data to save:', groupDataWithMetadata);
-      
-      const docRef = await addDoc(groupsRef, groupDataWithMetadata);
-      
-      console.log('[Firestore] Group added successfully:', docRef.id, groupData);
-      console.log('[DEBUG] Group document path:', docRef.path);
-      return docRef.id;
+      const groupRef = doc(db, 'courses', window.courseId, 'presentations', window.presentationId, 'slides', window.currentSlideIndex.toString(), 'groups', groupId);
+      await deleteDoc(groupRef);
+      console.log('[Firestore] Group deleted:', groupId);
     } catch (error) {
-      console.error('[Firestore] Error adding group:', error);
-      console.error('[Firestore] Error details:', error.code, error.message);
-      return null;
+      console.error('[Firestore] Error deleting group:', error);
+    }
+  };
+
+  const updateCommentInFirestore = async (commentId, updates) => {
+    try {
+      if (window.currentSlideIndex === undefined || window.currentSlideIndex === null) {
+        console.error('[Firestore] No current slide index available');
+        return;
+      }
+      const commentRef = doc(db, 'courses', window.courseId, 'presentations', window.presentationId, 'slides', window.currentSlideIndex.toString(), 'comments', commentId);
+      await updateDoc(commentRef, updates);
+      console.log('[Firestore] Comment updated:', commentId, updates);
+    } catch (error) {
+      console.error('[Firestore] Error updating comment:', error);
     }
   };
 
   const updateGroupInFirestore = async (groupId, updates) => {
-    console.log('[DEBUG] updateGroupInFirestore called with:', groupId, updates);
     try {
-      const groupsRef = getGroupsCollection();
-      if (!groupsRef) {
-        console.error('[Firestore] getGroupsCollection() returned null for update!');
+      if (window.currentSlideIndex === undefined || window.currentSlideIndex === null) {
+        console.error('[Firestore] No current slide index available');
         return;
       }
-      
-      const groupDoc = doc(groupsRef, groupId);
-      console.log('[DEBUG] Updating group document:', groupDoc.path);
-      
-      // Check if the group still exists before updating
-      const groupSnap = await getDoc(groupDoc);
-      if (!groupSnap.exists()) {
-        console.log('[DEBUG] Group no longer exists, skipping update:', groupId);
-        return;
-      }
-      
-      const updateData = {
-        ...updates,
-        updatedAt: new Date()
-      };
-      console.log('[DEBUG] Update data:', updateData);
-      
-      await updateDoc(groupDoc, updateData);
-      
-      console.log('[Firestore] Group updated successfully:', groupId, updates);
+      const groupRef = doc(db, 'courses', window.courseId, 'presentations', window.presentationId, 'slides', window.currentSlideIndex.toString(), 'groups', groupId);
+      await updateDoc(groupRef, updates);
+      console.log('[Firestore] Group updated:', groupId, updates);
     } catch (error) {
       console.error('[Firestore] Error updating group:', error);
-      console.error('[Firestore] Error details:', error.code, error.message);
-    }
-  };
-
-  const deleteGroupFromFirestore = async (groupId) => {
-    try {
-      // Add to deletion tracking to prevent re-adding from Firestore listener
-      groupsBeingDeleted.add(groupId);
-      console.log('[DEBUG] Added group to deletion tracking:', groupId);
-      
-      const groupsRef = getGroupsCollection();
-      if (!groupsRef) {
-        console.error('[Firestore] getGroupsCollection() returned null for deletion!');
-        return;
-      }
-      
-      const groupDoc = doc(groupsRef, groupId);
-      console.log('[DEBUG] Deleting group document:', groupDoc.path);
-      
-      // Check if the group exists before trying to delete it
-      const groupSnap = await getDoc(groupDoc);
-      if (!groupSnap.exists()) {
-        console.log('[DEBUG] Group does not exist in Firestore, skipping deletion:', groupId);
-        groupsBeingDeleted.delete(groupId);
-        return;
-      }
-      
-      await deleteDoc(groupDoc);
-      
-      console.log('[Firestore] Group deleted from Firestore:', groupId);
-      
-      // Remove from deletion tracking after a longer delay to ensure Firestore listener processes
-      setTimeout(() => {
-        groupsBeingDeleted.delete(groupId);
-        console.log('[DEBUG] Removed group from deletion tracking:', groupId);
-      }, 5000);
-    } catch (error) {
-      console.error('[Firestore] Error deleting group:', error);
-      console.error('[Firestore] Error details:', error.code, error.message);
-      // Remove from deletion tracking on error
-      groupsBeingDeleted.delete(groupId);
     }
   };
 
   const updateLikeInFirestore = async (targetId, targetType, isLiked) => {
     try {
-      const likesRef = getLikesCollection();
-      if (!likesRef) return;
-      
-      const userId = getUserId();
-      if (!userId) return;
-      
-      const likeDoc = doc(likesRef, `${targetId}_${userId}`);
-      
-      if (isLiked) {
-        await setDoc(likeDoc, {
-          targetId,
-          targetType, // 'comment' or 'reply'
-          userId,
-          createdAt: new Date()
-        });
-      } else {
-        await deleteDoc(likeDoc);
+      if (window.currentSlideIndex === undefined || window.currentSlideIndex === null) {
+        console.error('[Firestore] No current slide index available');
+        return;
       }
       
-      console.log('[Firestore] Like updated:', targetId, targetType, isLiked);
+      const likesRef = collection(db, 'courses', window.courseId, 'presentations', window.presentationId, 'likes');
+      const likeDocRef = doc(likesRef, `${targetId}_${targetType}`);
+      
+      if (targetType === 'comment') {
+        const commentRef = doc(db, 'courses', window.courseId, 'presentations', window.presentationId, 'slides', window.currentSlideIndex.toString(), 'comments', targetId);
+        const commentDoc = await getDoc(commentRef);
+        
+        if (commentDoc.exists()) {
+          const commentData = commentDoc.data();
+          const likedUsers = commentData.likedUsers || [];
+          const currentUserId = currentUser.uid;
+          
+          if (isLiked) {
+            // Add user to liked users if not already there
+            if (!likedUsers.includes(currentUserId)) {
+              likedUsers.push(currentUserId);
+            }
+          } else {
+            // Remove user from liked users
+            const userIndex = likedUsers.indexOf(currentUserId);
+            if (userIndex > -1) {
+              likedUsers.splice(userIndex, 1);
+            }
+          }
+          
+          const likeCount = likedUsers.length;
+          await updateDoc(commentRef, { 
+            likes: likeCount,
+            likedUsers: likedUsers 
+          });
+          console.log('[Firestore] Comment likes updated:', targetId, likeCount, 'likedUsers:', likedUsers);
+        }
+      } else if (targetType === 'reply') {
+        const [commentId, replyIndex] = targetId.split('_reply_');
+        const commentRef = doc(db, 'courses', window.courseId, 'presentations', window.presentationId, 'slides', window.currentSlideIndex.toString(), 'comments', commentId);
+        const commentDoc = await getDoc(commentRef);
+        
+        if (commentDoc.exists()) {
+          const commentData = commentDoc.data();
+          const replies = commentData.replies || [];
+          const replyIndexNum = parseInt(replyIndex);
+          
+          if (replies[replyIndexNum]) {
+            const reply = replies[replyIndexNum];
+            const likedUsers = reply.likedUsers || [];
+            const currentUserId = currentUser.uid;
+            
+            if (isLiked) {
+              // Add user to liked users if not already there
+              if (!likedUsers.includes(currentUserId)) {
+                likedUsers.push(currentUserId);
+              }
+            } else {
+              // Remove user from liked users
+              const userIndex = likedUsers.indexOf(currentUserId);
+              if (userIndex > -1) {
+                likedUsers.splice(userIndex, 1);
+              }
+            }
+            
+            const likeCount = likedUsers.length;
+            replies[replyIndexNum] = {
+              ...reply,
+              likes: likeCount,
+              likedUsers: likedUsers
+            };
+            
+            await updateDoc(commentRef, { replies: replies });
+            console.log('[Firestore] Reply likes updated:', targetId, likeCount, 'likedUsers:', likedUsers);
+          }
+        }
+      }
+      
+      // Update user's like status
+      await setDoc(likeDocRef, {
+        userId: currentUser.uid,
+        targetId: targetId,
+        targetType: targetType,
+        isLiked: isLiked,
+        timestamp: serverTimestamp()
+      }, { merge: true });
+      
+      console.log('[Firestore] Like status updated:', targetId, targetType, isLiked);
     } catch (error) {
       console.error('[Firestore] Error updating like:', error);
     }
@@ -328,9 +374,22 @@ const LivePresentationViewer = () => {
           return;
         }
         
-        setPresentation({
+        const presentationWithDefaults = {
           id: presentationSnap.id,
+          currentSlideIndex: presentationData.currentSlideIndex || 0,
           ...presentationData
+        };
+        
+        setPresentation(presentationWithDefaults);
+        
+        // Set global variables immediately in fetchLive
+        window.currentSlideIndex = presentationWithDefaults.currentSlideIndex;
+        window.courseId = courseId;
+        window.presentationId = presentationSnap.id;
+        console.log('[LiveViewer] Set global variables (from fetchLive):', {
+          currentSlideIndex: window.currentSlideIndex,
+          courseId: window.courseId,
+          presentationId: window.presentationId
         });
         
         // Set slides from the presentation document
@@ -367,9 +426,26 @@ const LivePresentationViewer = () => {
       if (doc.exists()) {
         const data = doc.data();
         console.log('[LiveViewer] Presentation updated:', data);
-        setPresentation({
+        console.log('[LiveViewer] Presentation keys:', Object.keys(data));
+        console.log('[LiveViewer] currentSlideIndex value:', data.currentSlideIndex);
+        
+        // Set default currentSlideIndex if not present
+        const presentationData = {
           id: doc.id,
+          currentSlideIndex: data.currentSlideIndex || 0, // Default to slide 0
           ...data
+        };
+        
+        setPresentation(presentationData);
+        
+        // Make all required variables globally accessible immediately
+        window.currentSlideIndex = presentationData.currentSlideIndex;
+        window.courseId = courseId;
+        window.presentationId = doc.id;
+        console.log('[LiveViewer] Set global variables:', {
+          currentSlideIndex: window.currentSlideIndex,
+          courseId: window.courseId,
+          presentationId: window.presentationId
         });
         
         if (data.slides && Array.isArray(data.slides)) {
@@ -397,160 +473,103 @@ const LivePresentationViewer = () => {
     
     console.log('[LiveViewer] Setting up Firestore listeners for comments, groups, and likes');
     console.log('[LiveViewer] Paths:', {
-      comments: `courses/${courseId}/presentations/${presentationId}/comments`,
-      groups: `courses/${courseId}/presentations/${presentationId}/groups`,
-      likes: `courses/${courseId}/presentations/${presentationId}/likes`
+      comments: `courses/${window.courseId}/presentations/${window.presentationId}/slides/${window.currentSlideIndex}/comments`,
+      groups: `courses/${window.courseId}/presentations/${window.presentationId}/slides/${window.currentSlideIndex}/groups`,
+      likes: `courses/${window.courseId}/presentations/${window.presentationId}/likes`
     });
     
     const commentsRef = getCommentsCollection();
     const groupsRef = getGroupsCollection();
     const likesRef = getLikesCollection();
     
+    console.log('[LiveViewer] One or more collections are null:', { commentsRef: !!commentsRef, groupsRef: !!groupsRef, likesRef: !!likesRef });
+    
     if (!commentsRef || !groupsRef || !likesRef) {
-      console.error('[LiveViewer] One or more collections are null:', {
-        commentsRef: !!commentsRef,
-        groupsRef: !!groupsRef,
-        likesRef: !!likesRef
-      });
+      console.error('[LiveViewer] Cannot set up listeners - missing collection references');
       return;
     }
     
     // Comments listener
-    const commentsQuery = query(commentsRef, orderBy('createdAt', 'asc'));
+    const commentsQuery = query(commentsRef, orderBy('timestamp', 'asc'));
     console.log('[Firestore] Setting up comments listener for query:', commentsQuery);
     
     const commentsUnsubscribe = onSnapshot(commentsQuery, (snapshot) => {
-      console.log('[Firestore] Comments snapshot received:', {
-        empty: snapshot.empty,
-        size: snapshot.size,
-        changes: snapshot.docChanges().length
-      });
+      console.log('=== COMMENTS LISTENER UPDATE ===');
+      console.log('[Firestore] Current Slide Index:', window.currentSlideIndex);
+      console.log('[Firestore] Comments snapshot received, changes:', snapshot.docChanges().length);
       
-      // Handle existing documents (initial load)
-      if (!commentsLoaded) {
-        console.log('[Firestore] Loading existing comments...');
-        snapshot.docs.forEach((doc) => {
-          const commentData = { id: doc.id, ...doc.data() };
-          console.log('[Firestore] Loading existing comment:', commentData);
-          window.addCommentToUI(commentData);
-        });
-        setCommentsLoaded(true);
-        
-        // Load any pending groups now that comments are available
-        if (window.pendingGroups && window.pendingGroups.length > 0) {
-          console.log('[Firestore] Loading pending groups after comments loaded:', window.pendingGroups.length);
-          window.pendingGroups.forEach((groupData) => {
-            console.log('[Firestore] Loading pending group:', groupData);
-            window.addGroupToUI(groupData);
-          });
-          window.pendingGroups = [];
-        }
-        return;
-      }
-      
-      // Handle changes (real-time updates)
       snapshot.docChanges().forEach((change) => {
         const commentData = { id: change.doc.id, ...change.doc.data() };
-        console.log('[Firestore] Comment change:', change.type, commentData);
-        
-        // Skip if this is our own comment being added (to prevent duplication)
-        const currentUserId = getUserId();
-        if (change.type === 'added' && commentData.userId === currentUserId) {
-          console.log('[Firestore] Skipping own comment to prevent duplication:', commentData.id);
-          return;
-        }
+        console.log('[Firestore] Comment change:', change.type, JSON.stringify(commentData, null, 2));
         
         if (change.type === 'added') {
-          // Add new comment to UI
-          window.addCommentToUI(commentData);
+          // Process comment data - likes are now handled separately
+          const processedCommentData = {
+            ...commentData,
+            likes: commentData.likes || 0, // likes is now a number
+            replies: commentData.replies || []
+          };
+          
+          console.log('[Firestore] ✅ NEW COMMENT RECEIVED:');
+          console.log('[Firestore] Comment ID:', commentData.id);
+          console.log('[Firestore] Slide Index:', commentData.slideIndex);
+          console.log('[Firestore] Comment Text:', commentData.text);
+          console.log('[Firestore] Total Likes:', processedCommentData.likes);
+          console.log('[Firestore] Replies Count:', processedCommentData.replies.length);
+          console.log('[Firestore] Processed comment data for UI:', JSON.stringify(processedCommentData, null, 2));
+          
+          window.addCommentToUI(processedCommentData);
         } else if (change.type === 'modified') {
-          // Update existing comment in UI
-          window.updateCommentInUI(commentData);
+          // Process comment data - likes are now handled separately
+          const processedCommentData = {
+            ...commentData,
+            likes: commentData.likes || 0, // likes is now a number
+            replies: commentData.replies || []
+          };
+          
+          console.log('[Firestore] 🔄 COMMENT UPDATED:');
+          console.log('[Firestore] Comment ID:', commentData.id);
+          console.log('[Firestore] Slide Index:', commentData.slideIndex);
+          console.log('[Firestore] New Total Likes:', processedCommentData.likes);
+          console.log('[Firestore] Processed comment data for UI update:', JSON.stringify(processedCommentData, null, 2));
+          
+          window.updateCommentInUI(processedCommentData);
         } else if (change.type === 'removed') {
-          // Remove comment from UI
+          console.log('[Firestore] ❌ COMMENT REMOVED:');
+          console.log('[Firestore] Comment ID:', commentData.id);
+          console.log('[Firestore] Slide Index:', commentData.slideIndex);
+          
           window.removeCommentFromUI(commentData.id);
+          window.userLikes.delete(commentData.id);
         }
       });
+      console.log('=== END COMMENTS LISTENER UPDATE ===');
     }, (error) => {
-      console.error('[Firestore] Error in comments listener:', error);
-      console.error('[Firestore] Error details:', error.code, error.message);
+      console.error('[Firestore] Comments listener error:', error);
     });
     
     // Groups listener
-    const groupsQuery = query(groupsRef, orderBy('createdAt', 'asc'));
+    const groupsQuery = query(groupsRef, orderBy('name', 'asc'));
     console.log('[DEBUG] Setting up groups listener for:', groupsRef.path);
     console.log('[DEBUG] Groups listener - firestoreInitialized:', firestoreInitialized);
-    console.log('[DEBUG] Groups listener - groupsLoaded:', groupsLoaded);
-    console.log('[DEBUG] Groups query:', groupsQuery);
     
     const groupsUnsubscribe = onSnapshot(groupsQuery, (snapshot) => {
-      console.log('[Firestore] Groups snapshot received:', {
-        empty: snapshot.empty,
-        size: snapshot.size,
-        changes: snapshot.docChanges().length,
-        docs: snapshot.docs.map(doc => ({ id: doc.id, data: doc.data() }))
-      });
+      console.log('[Firestore] Groups snapshot received, changes:', snapshot.docChanges().length);
       
-      // Handle existing documents (initial load)
-      if (!groupsLoaded) {
-        console.log('[Firestore] Loading existing groups...');
-        console.log('[DEBUG] Number of groups to load:', snapshot.docs.length);
-        if (snapshot.docs.length === 0) {
-          console.log('[DEBUG] No groups found in Firestore');
-        }
-        
-        // Store groups data to load after comments are ready
-        const groupsToLoad = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-        
-        // Load groups immediately - don't wait for comments
-        console.log('[DEBUG] Groups being deleted:', Array.from(groupsBeingDeleted));
-        groupsToLoad.forEach((groupData) => {
-          // Skip if group is being deleted
-          if (groupsBeingDeleted.has(groupData.id)) {
-            console.log('[DEBUG] Skipping group load - group is being deleted:', groupData.id);
-            return;
-          }
-          console.log('[Firestore] Loading existing group:', groupData);
-          window.addGroupToUI(groupData);
-        });
-        
-        setGroupsLoaded(true);
-        return;
-      }
-      
-      // Handle changes (real-time updates)
       snapshot.docChanges().forEach((change) => {
         const groupData = { id: change.doc.id, ...change.doc.data() };
         console.log('[Firestore] Group change:', change.type, groupData);
-        console.log('[DEBUG] Group change details:', {
-          type: change.type,
-          docId: change.doc.id,
-          docPath: change.doc.ref.path,
-          data: change.doc.data()
-        });
-        
-        // Skip if group is being deleted
-        if (groupsBeingDeleted.has(groupData.id)) {
-          console.log('[DEBUG] Skipping group change - group is being deleted:', groupData.id, 'Change type:', change.type);
-          return;
-        }
         
         if (change.type === 'added') {
-          // Add new group to UI
-          console.log('[DEBUG] Adding new group to UI from Firestore');
           window.addGroupToUI(groupData);
         } else if (change.type === 'modified') {
-          // Update existing group in UI
-          console.log('[DEBUG] Updating existing group in UI from Firestore');
           window.updateGroupInUI(groupData);
         } else if (change.type === 'removed') {
-          // Remove group from UI
-          console.log('[DEBUG] Removing group from UI from Firestore');
           window.removeGroupFromUI(groupData.id);
         }
       });
     }, (error) => {
-      console.error('[Firestore] Error in groups listener:', error);
+      console.error('[Firestore] Groups listener error:', error);
     });
     
     // Likes listener
@@ -567,8 +586,18 @@ const LivePresentationViewer = () => {
         snapshot.docs.forEach((doc) => {
           const likeData = { id: doc.id, ...doc.data() };
           console.log('[Firestore] Loading existing like:', likeData);
-          window.addLikeToUI(likeData);
+          
+          // Only add to UI if the like is active (isLiked: true)
+          if (likeData.isLiked) {
+            window.addLikeToUI(likeData);
+          }
         });
+        
+        // After loading all likes, update all comment like states
+        setTimeout(() => {
+          window.updateAllCommentLikeStates();
+        }, 100);
+        
         return;
       }
       
@@ -577,9 +606,13 @@ const LivePresentationViewer = () => {
         const likeData = { id: change.doc.id, ...change.doc.data() };
         console.log('[Firestore] Like change:', change.type, likeData);
         
-        if (change.type === 'added') {
-          // Add like to UI
-          window.addLikeToUI(likeData);
+        if (change.type === 'added' || change.type === 'modified') {
+          // Add like to UI if isLiked: true, remove if isLiked: false
+          if (likeData.isLiked) {
+            window.addLikeToUI(likeData);
+          } else {
+            window.removeLikeFromUI(likeData);
+          }
         } else if (change.type === 'removed') {
           // Remove like from UI
           window.removeLikeFromUI(likeData);
@@ -1064,971 +1097,204 @@ const LivePresentationViewer = () => {
     console.log('[DEBUG] useEffect: slides length:', slides?.length);
     console.log('[DEBUG] useEffect: presentation:', !!presentation);
     console.log('[DEBUG] useEffect: Calling initVanillaJS');
-    initVanillaJS();
+    initVanillaJS(
+      toggleDiscussion,
+      addComment,
+      like,
+      reply,
+      removeComment,
+      likeReply,
+      toggleReplies,
+      removeFromGroup,
+      removeGroup,
+      selectAll,
+      handleGroupMouseDown,
+      manageGroupData,
+      addCommentToFirestore,
+      addGroupToFirestore,
+      deleteCommentFromFirestore,
+      deleteGroupFromFirestore,
+      updateCommentInFirestore,
+      updateGroupInFirestore,
+      updateLikeInFirestore,
+      getUserId,
+      updateCommentLikes,
+      updateReplyLikes,
+      updateAllCommentReplies,
+      updateAllGroupLikes,
+      updateGroupLikes,
+      updateGroupReplies,
+      slides,
+      presentation,
+      groupsBeingDeleted
+    );
     console.log('[DEBUG] useEffect: initVanillaJS called');
   }, [courseId, presentationId, slides, presentation]);
 
-  const initVanillaJS = useCallback(() => {
-    console.log('[DEBUG] ===== initVanillaJS FUNCTION CALLED =====');
-    // Global variables
-    let commentsMap = {};
-    let commentId = 0;
-    let draggedEl = null;
-    let isDiscussionOpen = false;
-    let userLikes = new Set();
-
-    // Initialize comment management module
-    CommentManagement.initializeCommentManagement(commentsMap, commentId, userLikes);
-
-      // Make functions globally available
-  window.toggleDiscussion = toggleDiscussion;
-  window.addComment = addComment;
-  window.like = like;
-  window.reply = reply;
-  window.removeComment = removeComment;
-  window.likeReply = likeReply;
-  window.toggleReplies = toggleReplies;
-  window.removeFromGroup = removeFromGroup;
-  window.removeGroup = removeGroup;
-  window.selectAll = selectAll;
-  window.handleGroupMouseDown = handleGroupMouseDown;
-  window.manageGroupData = manageGroupData;
-  
-  // Add Firestore functions to window to avoid redeclaration issues
-  window.addCommentToFirestore = addCommentToFirestore;
-  window.addGroupToFirestore = addGroupToFirestore;
-  window.deleteCommentFromFirestore = deleteCommentFromFirestore;
-  window.deleteGroupFromFirestore = deleteGroupFromFirestore;
-  window.updateCommentInFirestore = updateCommentInFirestore;
-  window.updateGroupInFirestore = updateGroupInFirestore;
-  window.updateLikeInFirestore = updateLikeInFirestore;
-  window.getUserId = getUserId;
-  
-  // Add Firestore save function to window
-  window.saveGroupToFirestore = (groupData) => {
-    console.log('[DEBUG] saveGroupToFirestore called with:', groupData);
-    return addGroupToFirestore(groupData);
-  };
-
-  // Add comment management helper functions to window
-  window.saveReply = CommentManagement.saveReply;
-  window.cancelReply = CommentManagement.cancelReply;
-  window.removeReply = CommentManagement.removeReply;
-  window.syncUserLikesFromFirestore = CommentManagement.syncUserLikesFromFirestore;
-  window.addLikeToUI = CommentManagement.addLikeToUI;
-  window.removeLikeFromUI = CommentManagement.removeLikeFromUI;
-  
-  // Add comment management UI update functions to window
-  window.updateCommentLikes = updateCommentLikes;
-  window.updateReplyLikes = updateReplyLikes;
-  window.updateAllCommentReplies = updateAllCommentReplies;
-  window.updateAllGroupLikes = updateAllGroupLikes;
-
-    // Set up drop event listeners in initVanillaJS
-    console.log('[DEBUG] initVanillaJS: Starting drop event listener setup');
-    const slideElement = document.getElementById("slideArea");
-    const groupingAreaElement = document.getElementById("groupingArea");
+  // Define functions that will be passed to initVanillaJS
+  const toggleDiscussion = () => {
+    console.log('[DEBUG] ===== toggleDiscussion FUNCTION CALLED =====');
+    const panel = document.getElementById('commentPanel');
+    const toggleOpen = document.getElementById('discussionToggleOpen');
+    const toggleClose = document.getElementById('discussionToggle');
     
-    console.log('[DEBUG] initVanillaJS: slideElement found:', !!slideElement);
-    console.log('[DEBUG] initVanillaJS: groupingAreaElement found:', !!groupingAreaElement);
-    
-    if (slideElement) {
-      console.log('[DEBUG] Setting up drop event listeners in initVanillaJS');
-      slideElement.addEventListener("dragover", e => {
-        console.log('[DEBUG] initVanillaJS: dragover event triggered');
-        e.preventDefault();
-      });
-      slideElement.addEventListener("drop", e => {
-        console.log('[DEBUG] Drop event triggered (inside initVanillaJS)');
-        alert('DROP EVENT TRIGGERED!'); // Temporary alert for debugging
-        e.preventDefault();
-        if (!draggedEl) {
-          console.log('[DEBUG] No draggedEl found');
-          return;
-        }
-
-        const id = draggedEl.dataset.id || draggedEl.closest("li")?.dataset.id;
-        console.log('[UI] Comment ID from dragged element:', id);
-        if (!id) {
-          console.log('[UI] No comment ID found in dragged element');
-          return;
-        }
-
-        const comment = commentsMap[id];
-        console.log('[UI] Found comment for grouping:', id, comment);
-
-        const targetGroup = Array.from(groupingAreaElement.querySelectorAll(".note-box")).find(g => {
-          const rect = g.getBoundingClientRect();
-          return e.clientX > rect.left && e.clientX < rect.right &&
-                 e.clientY > rect.top && e.clientY < rect.bottom;
-        });
-
-        if (targetGroup) {
-          console.log('[UI] Adding to existing group:', targetGroup);
-          
-          // Check if comment is already in this group
-          const existingComment = targetGroup.querySelector(`li[data-id="${id}"]`);
-          if (existingComment) {
-            console.log('[UI] Comment already in this group, skipping');
-            return;
-          }
-          
-          // Add comment to existing group in Firestore
-          const groupId = targetGroup.dataset.groupId;
-          if (groupId && !groupId.startsWith('group_')) {
-            const currentCommentIds = Array.from(targetGroup.querySelectorAll('li[data-id]'))
-              .map(el => el.dataset.id)
-              .filter(commentId => commentId && commentId !== id);
-            
-            if (!currentCommentIds.includes(id)) {
-              currentCommentIds.push(id);
-              console.log('[UI] Updating group in Firestore with new comment:', groupId, currentCommentIds);
-              window.updateGroupInFirestore(groupId, { commentIds: currentCommentIds });
-            }
-          }
-          
-          // Add to UI
-          const ul = targetGroup.querySelector("ul");
-          const li = document.createElement("li");
-          li.className = "grouped-comment";
-          li.draggable = true;
-          li.dataset.id = id;
-          li.dataset.type = "comment";
-          li.addEventListener("dragstart", e => draggedEl = li);
-          
-          const hasReplies = comment.replies.length > 0;
-          const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
-          const isLiked = userLikes.has(id);
-          const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
-          
-          li.innerHTML = `
-            <div class="comment-content">
-              <div class="comment-text">${comment.text}</div>
-              <div class="comment-actions">
-                <span class="${likeClass}" onclick="like('${id}', this)">👍 ${comment.likes}</span>
-                <button class="reply-btn" title="Reply" onclick="reply(this)">🗨️</button>
-                <span class="remove-comment" onclick="removeFromGroup('${id}', this)">×</span>
-                ${replyToggle}
-              </div>
-            </div>
-          `;
-          
-          ul.appendChild(li);
-          // Don't remove the original comment, just mark it as grouped
-          draggedEl.classList.add('grouped');
-          comment.grouped = true;
-          updateGroupLikes(targetGroup);
-          updateGroupReplies(id);
-        } else {
-          console.log('[UI] Creating new group');
-          // Create new group
-          const groupData = {
-            name: 'New Group',
-            position: {
-              x: e.clientX - 120,
-              y: e.clientY - 60
-            },
-            commentIds: [id]
-          };
-          
-          // Add to Firestore first
-          console.log('[UI] Creating new group with data:', groupData);
-          console.log('[DEBUG] About to call addGroupToFirestore...');
-          window.addGroupToFirestore(groupData).then(firestoreGroupId => {
-            console.log('[DEBUG] addGroupToFirestore returned:', firestoreGroupId);
-            if (!firestoreGroupId) {
-              console.error('[UI] Firestore group creation failed, not adding group to UI.');
-              return;
-            }
-            // Create group with Firestore ID
-            const group = document.createElement("div");
-            group.className = "note-box";
-            group.dataset.groupId = firestoreGroupId;
-            group.style.left = groupData.position.x + "px";
-            group.style.top = groupData.position.y + "px";
-            
-            // Define variables for the new group
-            const hasReplies = comment.replies.length > 0;
-            const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
-            const isLiked = userLikes.has(id);
-            const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
-            
-            group.innerHTML = `
-              <div class="note-header" onmousedown="handleGroupMouseDown(event, this.closest('.note-box'))">
-                <input type="text" placeholder="Group Label" style="width: 100%; border: none; background: transparent; font-weight: bold;" onblur="manageGroupData('update_label', this.parentElement.parentElement, { label: this.value })" value="${groupData.name || 'New Group'}">
-                <span class="remove-group" onclick="removeGroup(this.parentElement.parentElement)">×</span>
-              </div>
-              <ul class="note-comments">
-                <li class="grouped-comment" data-id="${id}" data-type="comment" draggable="true">
-                  <div class="comment-content">
-                    <div class="comment-text">${comment.text}</div>
-                    <div class="comment-actions">
-                      <span class="${likeClass}" onclick="like('${id}', this)">👍 ${comment.likes}</span>
-                      <button class="reply-btn" title="Reply" onclick="reply(this)">🗨️</button>
-                      <span class="remove-comment" onclick="removeFromGroup('${id}', this)">×</span>
-                      ${replyToggle}
-                    </div>
-                  </div>
-                </li>
-              </ul>
-            `;
-            
-            const groupingArea = document.getElementById('groupingArea');
-            if (groupingArea) {
-              groupingArea.appendChild(group);
-              console.log('[DEBUG] Group added to DOM with ID:', firestoreGroupId);
-              console.log('[DEBUG] Group element:', group);
-            } else {
-              console.warn('[UI] groupingArea not found. Group not appended.');
-            }
-            // Don't remove the original comment, just mark it as grouped
-            draggedEl.classList.add('grouped');
-            comment.grouped = true;
-            
-            // Add drag event listeners
-            const li = group.querySelector("li");
-            li.addEventListener("dragstart", e => draggedEl = li);
-          });
-        }
-      });
-    }
-    
-    if (groupingAreaElement) {
-      groupingAreaElement.addEventListener("dragover", e => e.preventDefault());
-    }
-
-    // Firestore integration functions (called by React listeners)
-    window.addCommentToUI = (commentData) => {
-      const { id, text, likes = 0, replies = [], replyLikes = [], timestamp } = commentData;
-      
-      // Check if comment already exists to prevent duplication
-      if (commentsMap[id]) {
-        console.log('[UI] Comment already exists, skipping:', id);
-        return;
-      }
-      
-      commentsMap[id] = { text, likes, replies, replyLikes, timestamp, grouped: false };
-      const el = renderComment(id);
-      document.getElementById("commentList").appendChild(el);
-      console.log('[UI] Comment added from Firestore:', id);
-    };
-
-    window.updateCommentInUI = (commentData) => {
-      const { id, text, likes, replies, replyLikes } = commentData;
-      if (commentsMap[id]) {
-        commentsMap[id] = { ...commentsMap[id], text, likes, replies, replyLikes };
-        // Update existing comment element
-        const existingEl = document.querySelector(`[data-id="${id}"]`);
-        if (existingEl) {
-          const newEl = renderComment(id);
-          existingEl.replaceWith(newEl);
-        }
-        console.log('[UI] Comment updated from Firestore:', id);
-      }
-    };
-
-    window.removeCommentFromUI = (commentId) => {
-      const existingEl = document.querySelector(`[data-id="${commentId}"]`);
-      if (existingEl) {
-        existingEl.remove();
-      }
-      delete commentsMap[commentId];
-      console.log('[UI] Comment removed from Firestore:', commentId);
-    };
-
-    window.addGroupToUI = (groupData) => {
-      // console.log('[DEBUG] window.addGroupToUI called with:', groupData);
-      const { id, name, position, commentIds = [] } = groupData;
-      // Remove any existing group node with this id
-      const existing = document.querySelector(`.note-box[data-group-id='${id}']`);
-      if (existing) {
-        // console.log('[DEBUG] Removing existing group with same ID:', id);
-        existing.remove();
-      }
-      const group = document.createElement("div");
-      group.className = "note-box";
-      group.dataset.groupId = id;
-      group.style.left = (position?.x || 100) + "px";
-      group.style.top = (position?.y || 100) + "px";
-      group.style.width = "200px";
-      group.style.minHeight = "100px";
-      group.style.backgroundColor = "#fff3cd";
-      group.style.border = "2px solid #ffc107";
-      group.style.borderRadius = "5px";
-      group.style.padding = "10px";
-      group.style.cursor = "move";
-      group.style.zIndex = "1000";
-      group.style.position = "absolute";
-      
-      group.innerHTML = `
-                          <div class="group-header" style="font-weight: bold; margin-bottom: 10px; cursor: move;" onmousedown="handleGroupMouseDown(event, this.parentElement)">
-                    <input type="text" placeholder="Group Label" style="width: 100%; border: none; background: transparent; font-weight: bold; cursor: text;" onblur="manageGroupData('update_label', this.parentElement.parentElement, { label: this.value })" value="${name || 'New Group'}" onkeydown="if(event.key==='Enter')this.blur()" onclick="this.select()" onfocus="this.select()">
-                    <span class="group-label" style="display: none;"></span>
-                    <button onclick="removeGroup(this.parentElement.parentElement)" style="float: right; background: none; border: none; cursor: pointer; color: #dc3545;">✕</button>
-                  </div>
-        <ul style="list-style: none; padding: 0; margin: 0;">
-          ${commentIds.map(commentId => {
-            const comment = commentsMap[commentId];
-            if (!comment) return '';
-            const hasReplies = comment.replies.length > 0;
-            const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
-            const isLiked = userLikes.has(commentId);
-            const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
-            return `<li class="grouped-comment" draggable="true" data-id="${commentId}" data-type="comment">
-              <div class="comment-content">
-                <div class="comment-text">${comment.text}</div>
-                <div class="comment-actions">
-                  <span class="${likeClass}" onclick="like('${commentId}', this)">👍 ${comment.likes}</span>
-                  <span class="reply-btn" onclick="reply(this)">Reply</span>
-                  <span class="remove-btn" onclick="removeFromGroup('${commentId}', this)">✕</span>
-                </div>
-                ${replyToggle}
-              </div>
-            </li>`;
-          }).join('')}
-        </ul>
-      `;
-      
-      // Add to grouping area so it's visible in the discussion panel
-      const groupingArea = document.getElementById('groupingArea');
-      if (groupingArea) {
-        groupingArea.appendChild(group);
-        // console.log('[UI] Group added from Firestore to grouping area:', id);
-        
-        // Add drag event listeners to the group comments
-        const groupComments = group.querySelectorAll('li[data-id]');
-        groupComments.forEach(li => {
-          li.addEventListener("dragstart", e => {
-            // console.log('[DEBUG] Dragstart event triggered for group comment:', li.dataset.id);
-            draggedEl = li;
-          });
-        });
-      } else {
-        console.error('[UI] Error: groupingArea not found, cannot add group');
-      }
-    };
-
-    window.updateGroupInUI = (groupData) => {
-      const { id, name, position, commentIds } = groupData;
-      const existingGroup = document.querySelector(`[data-group-id="${id}"]`);
-      if (existingGroup) {
-        if (name) {
-          const nameSpan = existingGroup.querySelector('.note-header span');
-          if (nameSpan) nameSpan.textContent = name;
-        }
-        if (position) {
-          existingGroup.style.left = position.x + "px";
-          existingGroup.style.top = position.y + "px";
-        }
-        console.log('[UI] Group updated from Firestore:', id);
-      }
-    };
-
-    window.removeGroupFromUI = (groupId) => {
-      const existingGroup = document.querySelector(`[data-group-id="${groupId}"]`);
-      if (existingGroup) {
-        console.log('[DEBUG] Removing group from UI via Firestore listener:', groupId);
-        
-        // Get all comments in the group before removing it
-        const comments = existingGroup.querySelectorAll('li[data-id]');
-        
-        // Remove grouped state from all comments
-        comments.forEach(li => {
-          const commentId = li.dataset.id;
-          const data = commentsMap[commentId];
-          if (data) {
-            data.grouped = false;
-          }
-        });
-        
-        // Remove group from UI
-        existingGroup.remove();
-        
-        // Update chat panel for all comments - remove grouped class from original comments
-        const chatList = document.getElementById("commentList");
-        comments.forEach(li => {
-          const commentId = li.dataset.id;
-          const existing = chatList.querySelector(`.comment[data-id='${commentId}']`);
-          if (existing) {
-            existing.classList.remove("grouped");
-          }
-        });
-        
-        console.log('[UI] Group removed from Firestore:', groupId);
-      } else {
-        console.log('[DEBUG] Group not found in UI for removal:', groupId);
-      }
-      
-      // Remove from deletion tracking since it's been handled
-      groupsBeingDeleted.delete(groupId);
-      console.log('[DEBUG] Removed group from deletion tracking after UI removal:', groupId);
-    };
-
-    window.addLikeToUI = (likeData) => {
-      const { targetId, targetType, userId: likerId } = likeData;
-      const currentUserId = getUserId();
-      
-      // Add to userLikes Set if it's our own like
-      if (likerId === currentUserId) {
-        userLikes.add(targetId);
-        console.log('[UI] Added own like to userLikes Set:', targetId);
-        return;
-      }
-      
-      // Update like count for other users' likes
-      if (targetType === 'comment') {
-        if (commentsMap[targetId]) {
-          commentsMap[targetId].likes = (commentsMap[targetId].likes || 0) + 1;
-          updateCommentLikes(targetId, commentsMap[targetId].likes);
-        }
-      } else if (targetType === 'reply') {
-        const [commentId, replyIndex] = targetId.split('_reply_');
-        if (commentsMap[commentId] && commentsMap[commentId].replyLikes[replyIndex] !== undefined) {
-          commentsMap[commentId].replyLikes[replyIndex] = (commentsMap[commentId].replyLikes[replyIndex] || 0) + 1;
-          updateReplyLikes(commentId, parseInt(replyIndex), commentsMap[commentId].replyLikes[replyIndex]);
-        }
-      }
-      console.log('[UI] Like added from Firestore:', targetId, targetType);
-    };
-
-    window.removeLikeFromUI = (likeData) => {
-      const { targetId, targetType, userId: likerId } = likeData;
-      const currentUserId = getUserId();
-      
-      // Remove from userLikes Set if it's our own like
-      if (likerId === currentUserId) {
-        userLikes.delete(targetId);
-        console.log('[UI] Removed own like from userLikes Set:', targetId);
-        return;
-      }
-      
-      // Update like count for other users' unlikes
-      if (targetType === 'comment') {
-        if (commentsMap[targetId]) {
-          commentsMap[targetId].likes = Math.max(0, (commentsMap[targetId].likes || 1) - 1);
-          updateCommentLikes(targetId, commentsMap[targetId].likes);
-        }
-      } else if (targetType === 'reply') {
-        const [commentId, replyIndex] = targetId.split('_reply_');
-        if (commentsMap[commentId] && commentsMap[commentId].replyLikes[replyIndex] !== undefined) {
-          commentsMap[commentId].replyLikes[replyIndex] = Math.max(0, (commentsMap[commentId].replyLikes[replyIndex] || 1) - 1);
-          updateReplyLikes(commentId, parseInt(replyIndex), commentsMap[commentId].replyLikes[replyIndex]);
-        }
-      }
-      console.log('[UI] Like removed from Firestore:', targetId, targetType);
-    };
-
-    // Update slide display from React state
-    function updateSlideDisplay() {
-      const slideContent = document.getElementById('slideContent');
-      if (!slideContent || !slides || !presentation) {
-        console.log('[LivePresentationViewer] No slide content to display');
-        return;
-      }
-
-      const currentSlideIndex = presentation.currentSlideIndex || 0;
-      const slide = slides[currentSlideIndex];
-      console.log('[LivePresentationViewer] Displaying slide:', slide);
-      console.log('[LivePresentationViewer] Slide structure:', {
-        hasSlide: !!slide,
-        slideType: typeof slide,
-        hasImageUrl: slide && !!slide.imageUrl,
-        hasContent: slide && !!slide.content,
-        contentType: slide && slide.content ? typeof slide.content : 'none',
-        hasContentImageUrl: slide && slide.content && !!slide.content.imageUrl,
-        hasTitle: slide && !!slide.title,
-        slideKeys: slide ? Object.keys(slide) : []
-      });
-      
-      if (slide && slide.content && slide.content.imageUrl) {
-        // Handle slide with content.imageUrl structure
-        slideContent.innerHTML = `<img src="${slide.content.imageUrl}" alt="Slide ${currentSlideIndex + 1}" />`;
-      } else if (slide && slide.imageUrl) {
-        // Handle slide with direct imageUrl
-        slideContent.innerHTML = `<img src="${slide.imageUrl}" alt="Slide ${currentSlideIndex + 1}" />`;
-      } else if (slide && slide.content && typeof slide.content === 'string') {
-        // Handle text content
-        slideContent.innerHTML = `
-          <div class="text-content">
-            <h1>Slide ${currentSlideIndex + 1}</h1>
-            <div>${slide.content}</div>
-          </div>
-        `;
-      } else if (slide && slide.content && typeof slide.content === 'object' && slide.content.text) {
-        // Handle object content with text property
-        slideContent.innerHTML = `
-          <div class="text-content">
-            <h1>Slide ${currentSlideIndex + 1}</h1>
-            <div>${slide.content.text}</div>
-          </div>
-        `;
-      } else if (slide && slide.title) {
-        // Handle slide with just title
-        slideContent.innerHTML = `
-          <div class="text-content">
-            <h1>${slide.title}</h1>
-            <p>Slide ${currentSlideIndex + 1}</p>
-          </div>
-        `;
-      } else {
-        // Fallback
-        slideContent.innerHTML = `
-          <div class="text-content">
-            <h1>Slide ${currentSlideIndex + 1}</h1>
-            <p>No content available</p>
-          </div>
-        `;
-      }
-    }
-
-    function toggleDiscussion() {
-      console.log('[DEBUG] ===== toggleDiscussion FUNCTION CALLED =====');
-      const panel = document.getElementById('commentPanel');
-      const toggleOpen = document.getElementById('discussionToggleOpen');
-      const toggleClose = document.getElementById('discussionToggle');
-      
-      if (isDiscussionOpen) {
+    if (panel && toggleOpen && toggleClose) {
+      if (panel.style.display === 'flex') {
         panel.style.display = 'none';
         toggleOpen.style.display = 'block';
-        isDiscussionOpen = false;
         console.log('[DEBUG] Discussion panel closed');
       } else {
         panel.style.display = 'flex';
         toggleOpen.style.display = 'none';
-        isDiscussionOpen = true;
-        console.log('[DEBUG] Discussion panel opened - setting up drop listener');
-        
-        // Set up drop event listener when discussion panel opens
-        setTimeout(() => {
-          const groupingAreaElement = document.getElementById("groupingArea");
-          if (groupingAreaElement) {
-            console.log('[DEBUG] Setting up drop event listener in toggleDiscussion on groupingArea');
-            groupingAreaElement.addEventListener("dragover", e => {
-              console.log('[DEBUG] toggleDiscussion: dragover event triggered on groupingArea');
-              e.preventDefault();
-            });
-            // Guard against multiple drop listeners
-            if (groupingAreaElement._dropListener) {
-              groupingAreaElement.removeEventListener('drop', groupingAreaElement._dropListener);
-            }
-            const dropListener = function(e) {
-              // console.log('[DEBUG] Drop event triggered (in toggleDiscussion)');
-              e.preventDefault();
-              
-              // Prevent drop if we're dragging a group
-              if (window.isDraggingGroup) {
-                console.log('[DEBUG] Dropping while dragging group, ignoring drop event');
-                return;
-              }
-              
-              if (!draggedEl) {
-                // console.log('[DEBUG] No draggedEl found');
-                return;
-              }
-
-              const id = draggedEl.dataset.id || draggedEl.closest("li")?.dataset.id;
-              // console.log('[UI] Comment ID from dragged element:', id);
-              if (!id) {
-                // console.log('[UI] No comment ID found in dragged element');
-                return;
-              }
-
-              const comment = commentsMap[id];
-              // console.log('[UI] Found comment for grouping:', id, comment);
-
-              // Check if dropping on an existing group
-              const allGroups = Array.from(groupingAreaElement.querySelectorAll(".note-box"));
-              // console.log('[DEBUG] All groups found in DOM:', allGroups.length);
-              
-              // Only consider groups with valid Firestore IDs as "existing"
-              const targetGroup = allGroups.find(g => {
-                const rect = g.getBoundingClientRect();
-                const isInBounds = e.clientX > rect.left && e.clientX < rect.right &&
-                       e.clientY > rect.top && e.clientY < rect.bottom;
-                const hasValidId = g.dataset.groupId && !g.dataset.groupId.startsWith('group_');
-                return isInBounds && hasValidId;
-              });
-              
-              // Prevent creating new groups when dragging existing groups or group elements
-              if (draggedEl && (draggedEl.closest('.note-box') || draggedEl.classList.contains('grouped-comment'))) {
-                console.log('[DEBUG] Dragging an existing group or group element, not creating new one');
-                return;
-              }
-              
-              // Additional check: if the dragged element is part of a group, don't create new group
-              const draggedGroup = draggedEl?.closest('.note-box');
-              if (draggedGroup) {
-                console.log('[DEBUG] Dragged element is part of existing group, not creating new one');
-                return;
-              }
-
-              if (targetGroup) {
-                // console.log('[UI] Adding to existing group in toggleDiscussion:', targetGroup);
-                
-                // Check if comment is already in this group
-                const existingComment = targetGroup.querySelector(`li[data-id="${id}"]`);
-                if (existingComment) {
-                  // console.log('[UI] Comment already in this group, skipping');
-                  return;
-                }
-                
-                // Add comment to existing group in Firestore
-                const groupId = targetGroup.dataset.groupId;
-                if (groupId && !groupId.startsWith('group_')) {
-                  const currentCommentIds = Array.from(targetGroup.querySelectorAll('li[data-id]'))
-                    .map(el => el.dataset.id)
-                    .filter(commentId => commentId && commentId !== id);
-                  
-                  if (!currentCommentIds.includes(id)) {
-                    currentCommentIds.push(id);
-                    console.log('[Firestore] Updating group with new comment:', groupId, currentCommentIds);
-                    window.updateGroupInFirestore(groupId, { commentIds: currentCommentIds });
-                  }
-                }
-                
-                // Add to UI
-                const ul = targetGroup.querySelector("ul");
-                const li = document.createElement("li");
-                li.className = "grouped-comment";
-                li.draggable = true;
-                li.dataset.id = id;
-                li.dataset.type = "comment";
-                li.addEventListener("dragstart", e => draggedEl = li);
-                
-                const hasReplies = comment.replies.length > 0;
-                const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
-                const isLiked = userLikes.has(id);
-                const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
-                
-                li.innerHTML = `
-                  <div class="comment-content">
-                    <div class="comment-text">${comment.text}</div>
-                    <div class="comment-actions">
-                      <span class="${likeClass}" onclick="like('${id}', this)">👍 ${comment.likes}</span>
-                      <button class="reply-btn" title="Reply" onclick="reply(this)">🗨️</button>
-                      <span class="remove-comment" onclick="removeFromGroup('${id}', this)">×</span>
-                      ${replyToggle}
-                    </div>
-                  </div>
-                `;
-                
-                ul.appendChild(li);
-                // Don't remove the original comment, just mark it as grouped
-                if (draggedEl) {
-                  draggedEl.classList.add('grouped');
-                }
-                comment.grouped = true;
-                updateGroupLikes(targetGroup);
-                updateGroupReplies(id);
-                return;
-              }
-
-              // Create new group
-              const groupData = {
-                name: 'New Group',
-                position: {
-                  x: e.clientX - 120,
-                  y: e.clientY - 60
-                },
-                commentIds: [id]
-              };
-              
-              // Add to Firestore first
-              console.log('[Firestore] Creating new group:', groupData);
-              window.addGroupToFirestore(groupData).then(firestoreGroupId => {
-                if (!firestoreGroupId) {
-                  console.error('[Firestore] Group creation failed, not adding to UI.');
-                  return;
-                }
-                // Create group with Firestore ID
-                const group = document.createElement("div");
-                group.className = "note-box";
-                group.dataset.groupId = firestoreGroupId;
-                group.style.left = groupData.position.x + "px";
-                group.style.top = groupData.position.y + "px";
-                group.style.width = "200px";
-                group.style.minHeight = "100px";
-                group.style.backgroundColor = "#fff3cd";
-                group.style.border = "2px solid #ffc107";
-                group.style.borderRadius = "5px";
-                group.style.padding = "10px";
-                group.style.cursor = "move";
-                group.style.zIndex = "1000";
-                
-                const hasReplies = comment.replies.length > 0;
-                const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
-                const isLiked = userLikes.has(id);
-                const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
-                
-                group.innerHTML = `
-                  <div class="group-header" style="font-weight: bold; margin-bottom: 10px; cursor: move;" onmousedown="handleGroupMouseDown(event, this.parentElement)">
-                    <input type="text" placeholder="Group Label" style="width: 100%; border: none; background: transparent; font-weight: bold; cursor: text;" onblur="manageGroupData('update_label', this.parentElement.parentElement, { label: this.value })" onkeydown="if(event.key==='Enter')this.blur()" onclick="this.select()" onfocus="this.select()" value="New Group">
-                    <span class="group-label" style="display: none;"></span>
-                    <button onclick="removeGroup(this.parentElement.parentElement)" style="float: right; background: none; border: none; cursor: pointer; color: #dc3545;">✕</button>
-                  </div>
-                  <ul style="list-style: none; padding: 0; margin: 0;">
-                    <li class="grouped-comment" draggable="true" data-id="${id}" data-type="comment">
-                      <div class="comment-content">
-                        <div class="comment-text">${comment.text}</div>
-                        <div class="comment-actions">
-                          <span class="${likeClass}" onclick="like('${id}', this)">👍 ${comment.likes}</span>
-                          <span class="reply-btn" onclick="reply(this)">Reply</span>
-                          <span class="remove-btn" onclick="removeFromGroup('${id}', this)">✕</span>
-                        </div>
-                        ${replyToggle}
-                      </div>
-                    </li>
-                  </ul>
-                `;
-                
-                groupingAreaElement.appendChild(group);
-                
-                // Add to commentsMap
-                commentsMap[id] = comment;
-                
-                // Mark as grouped
-                if (draggedEl) {
-                  draggedEl.classList.add('grouped');
-                }
-                
-                // Also mark the original comment in chat panel as grouped
-                const chatComment = document.querySelector(`.comment[data-id='${id}']`);
-                if (chatComment) {
-                  chatComment.classList.add('grouped');
-                }
-                
-                comment.grouped = true;
-                
-                console.log('[Firestore] Group created successfully with ID:', firestoreGroupId);
-              });
-              
-              draggedEl = null;
-            };
-            groupingAreaElement.addEventListener('drop', dropListener);
-            groupingAreaElement._dropListener = dropListener;
-          }
-        }, 100); // Small delay to ensure DOM is ready
+        console.log('[DEBUG] Discussion panel opened');
       }
     }
+  };
 
+  const addComment = () => {
+    CommentManagement.addComment();
+  };
 
+  const like = (id, el) => {
+    CommentManagement.like(id, el);
+  };
 
+  const reply = (btn) => {
+    CommentManagement.reply(btn);
+  };
 
+  const removeComment = (commentId, el) => {
+    CommentManagement.removeComment(commentId, el);
+  };
 
+  const likeReply = (id, index, el) => {
+    CommentManagement.likeReply(id, index, el);
+  };
 
+  const toggleReplies = (el) => {
+    CommentManagement.toggleReplies(el);
+  };
 
-    function createCommentEl(text) {
-      return CommentManagement.createCommentEl(text);
-    }
+  const removeFromGroup = (commentId, el) => {
+    CommentManagement.removeFromGroup(commentId, el);
+  };
 
-    function renderComment(id) {
-      return CommentManagement.renderComment(id);
-    }
-
-    function like(id, el) {
-      CommentManagement.like(id, el);
-    }
-
-    function reply(btn) {
-      CommentManagement.reply(btn);
-    }
-
-    function removeComment(commentId, el) {
-      CommentManagement.removeComment(commentId, el);
-    }
-
-    function addComment() {
-      CommentManagement.addComment();
-    }
-
-    function likeReply(id, index, el) {
-      CommentManagement.likeReply(id, index, el);
-    }
-
-    const slide = document.getElementById("slideArea");
-    const groupingArea = document.getElementById("groupingArea");
+  const removeGroup = (el) => {
+    const group = el.closest('.note-box');
+    if (!group) return;
     
-    slide.addEventListener("dragover", e => e.preventDefault());
-    if (groupingArea) {
-      groupingArea.addEventListener("dragover", e => e.preventDefault());
+    const groupId = group.dataset.groupId;
+    console.log('[UI] Removing group:', groupId);
+    
+    // Mark group for deletion to prevent re-adding from Firestore
+    if (groupId && !groupId.startsWith('group_')) {
+      groupsBeingDeleted.add(groupId);
+      console.log('[DEBUG] Added group to deletion tracking:', groupId);
     }
-
-    // REMOVED: Duplicate drop event listener to avoid conflicts
-    // The entire drop event listener has been removed to prevent conflicts with the one in toggleDiscussion
-
-    // Add Enter key support for chat input
-    document.getElementById("chatText").addEventListener("keydown", e => {
-      if (e.key === "Enter") {
-        addComment();
+    
+    // Remove from UI immediately
+    group.remove();
+    
+    // Update chat panel for all comments - remove grouped class from original comments
+    const chatList = document.getElementById("commentList");
+    const comments = group.querySelectorAll('li[data-id]');
+    comments.forEach(li => {
+      const commentId = li.dataset.id;
+      const existing = chatList.querySelector(`.comment[data-id='${commentId}']`);
+      if (existing) {
+        existing.classList.remove("grouped");
       }
     });
-
-    // REMOVED: Duplicate drop event handler to prevent double group creation
-    // The drop event listener is now only in toggleDiscussion function
-
-    function removeFromGroup(commentId, el) {
-      CommentManagement.removeFromGroup(commentId, el);
+    
+    // Remove from Firestore
+    if (groupId && !groupId.startsWith('group_')) {
+      window.deleteGroupFromFirestore(groupId);
     }
+  };
 
-    function removeGroup(el) {
-      const group = el.closest('.note-box');
+  const selectAll = (el) => {
+    el.select();
+  };
+
+  const handleGroupMouseDown = (e, group) => {
+    e.preventDefault();
+    const startX = e.clientX - group.offsetLeft;
+    const startY = e.clientY - group.offsetTop;
+    
+    const handleMouseMove = (e) => {
+      group.style.left = (e.clientX - startX) + "px";
+      group.style.top = (e.clientY - startY) + "px";
+    };
+    
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      
+      // Update position in Firestore
       const groupId = group.dataset.groupId;
-      
-      console.log('[DEBUG] removeGroup called for groupId:', groupId);
-      
-      // Add to deletion tracking immediately
       if (groupId && !groupId.startsWith('group_')) {
-        groupsBeingDeleted.add(groupId);
-        console.log('[DEBUG] Added group to deletion tracking in removeGroup:', groupId);
+        const finalPosition = {
+          x: parseInt(group.style.left) || 0,
+          y: parseInt(group.style.top) || 0
+        };
+        console.log('[Firestore] Updating group position:', groupId, finalPosition);
+        window.updateGroupInFirestore(groupId, { position: finalPosition });
       }
-      
-      // Get all comments in the group before removing it
-      const comments = group.querySelectorAll('li[data-id]');
-      
-      // Remove grouped state from all comments
-      comments.forEach(li => {
-        const commentId = li.dataset.id;
-        const data = commentsMap[commentId];
-        if (data) {
-          data.grouped = false;
-        }
-      });
-      
-      // Remove group from UI immediately
-      group.remove();
-      
-      // Update chat panel for all comments - remove grouped class from original comments
-      const chatList = document.getElementById("commentList");
-      comments.forEach(li => {
-        const commentId = li.dataset.id;
-        const existing = chatList.querySelector(`.comment[data-id='${commentId}']`);
-        if (existing) {
-          existing.classList.remove("grouped");
-        }
-      });
-      
-      // Delete from Firestore if it's a valid Firestore-backed group
-      if (groupId && !groupId.startsWith('group_')) {
-        console.log('[DEBUG] Deleting group from Firestore:', groupId);
-        manageGroupData('delete', group);
-      } else {
-        console.log('[DEBUG] Removed temporary group from UI only:', groupId);
-      }
-    }
+    };
+    
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
 
-    function selectAll(el) {
-      // Auto-select all text when clicking on group label
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      const selection = window.getSelection();
-      selection.removeAllRanges();
-      selection.addRange(range);
-    }
+  const updateCommentLikes = (commentId, likeCount) => {
+    CommentManagement.updateCommentLikes(commentId, likeCount);
+  };
 
-    function handleGroupMouseDown(e, group) {
-      e.preventDefault();
-      e.stopPropagation();
-      
-      // Set global flag to indicate we're dragging a group
-      window.isDraggingGroup = true;
-      
-      let isDragging = false;
-      let startX, startY;
-      let originalLeft, originalTop;
-      
-      const handleMouseMove = (e) => {
-        if (isDragging) {
-          const x = e.clientX - startX;
-          const y = e.clientY - startY;
-          group.style.left = x + 'px';
-          group.style.top = y + 'px';
-        }
-      };
-      
-      const handleMouseUp = () => {
-        if (isDragging) {
-          // Update Firestore with final position when drag ends
-          const groupId = group.dataset.groupId;
-          if (groupId && !groupId.startsWith('group_')) {
-            const finalPosition = {
-              x: parseInt(group.style.left) || 0,
-              y: parseInt(group.style.top) || 0
-            };
-            console.log('[Firestore] Updating group position:', groupId, finalPosition);
-            window.updateGroupInFirestore(groupId, { position: finalPosition });
-          }
-        }
-        
-        isDragging = false;
-        // Clear global flag when drag ends
-        window.isDraggingGroup = false;
-        document.removeEventListener('mousemove', handleMouseMove);
-        document.removeEventListener('mouseup', handleMouseUp);
-      };
-      
-      isDragging = true;
-      originalLeft = parseInt(group.style.left) || 0;
-      originalTop = parseInt(group.style.top) || 0;
-      startX = e.clientX - originalLeft;
-      startY = e.clientY - originalTop;
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
-    }
+  const updateReplyLikes = (commentId, replyIndex, likeCount) => {
+    CommentManagement.updateReplyLikes(commentId, replyIndex, likeCount);
+  };
 
-    function updateGroupReplies(id) {
-      const allGroupItems = document.querySelectorAll(".note-box li[data-id='" + id + "']");
-      allGroupItems.forEach(li => {
-        const data = commentsMap[id];
-        const existingToggle = li.querySelector(".toggle-replies");
-        if (data.replies.length > 0 && !existingToggle) {
+  const updateAllCommentReplies = (commentId) => {
+    CommentManagement.updateAllCommentReplies(commentId);
+  };
+
+  const updateAllGroupLikes = () => {
+    document.querySelectorAll('.note-box').forEach(updateGroupLikes);
+  };
+
+  const updateGroupLikes = (groupElement) => {
+    const comments = groupElement.querySelectorAll('li[data-id]');
+    let totalLikes = 0;
+    
+    comments.forEach(li => {
+      const commentId = li.dataset.id;
+      // We'll get the data from CommentManagement module
+      totalLikes += 0; // Placeholder - will be updated by CommentManagement
+    });
+    
+    // Update group header to show total likes if needed
+    const groupHeader = groupElement.querySelector('.note-header');
+    if (groupHeader) {
+      // You can add total likes display here if needed
+    }
+  };
+
+  const updateGroupReplies = (id) => {
+    const groupComments = document.querySelectorAll(`.note-box li[data-id='${id}']`);
+    groupComments.forEach(li => {
+      const commentActions = li.querySelector('.comment-actions');
+      if (commentActions) {
+        const existingToggle = commentActions.querySelector('.toggle-replies');
+        if (!existingToggle) {
           const replyToggle = document.createElement("span");
           replyToggle.className = "toggle-replies";
           replyToggle.innerText = "[+]";
           replyToggle.setAttribute("onclick", "toggleReplies(this)");
-          li.querySelector('.comment-actions').appendChild(replyToggle);
+          commentActions.appendChild(replyToggle);
         }
-      });
-    }
-
-    function updateGroupLikes(groupElement) {
-      const commentIds = Array.from(groupElement.querySelectorAll('li')).map(li => li.dataset.id);
-      const totalLikes = commentIds.reduce((sum, id) => {
-        const comment = commentsMap[id];
-        return sum + (comment ? (comment.likes || 0) : 0);
-      }, 0);
-      
-      const likesElement = groupElement.querySelector('.group-likes');
-      if (likesElement) {
-        likesElement.innerText = `👍 ${totalLikes}`;
       }
-    }
-
-    function updateAllGroupLikes() {
-      document.querySelectorAll('.note-box').forEach(updateGroupLikes);
-    }
-
-    function updateCommentLikes(commentId, likeCount) {
-      CommentManagement.updateCommentLikes(commentId, likeCount);
-    }
-
-    function updateReplyLikes(commentId, replyIndex, likeCount) {
-      CommentManagement.updateReplyLikes(commentId, replyIndex, likeCount);
-    }
-
-    function toggleReplies(el) {
-      CommentManagement.toggleReplies(el);
-    }
-
-    function updateAllCommentReplies(commentId) {
-      CommentManagement.updateAllCommentReplies(commentId);
-    }
-
-    // Initialize with existing data from Firestore (if any)
-    // The Firestore listeners will handle loading existing comments and groups
-
-    // Initial slide display
-    updateSlideDisplay();
-  }, [presentation, slides]);
+    });
+  };
 
   // Add focused group management function
   const manageGroupData = (action, groupElement, data = {}) => {

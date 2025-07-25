@@ -2,12 +2,31 @@
 // Extracted from LivePresentationViewer.jsx
 
 // Global variables (these will be passed from the main component)
-let commentsMap = {};
-let commentId = 0;
-let userLikes = new Set();
+export let commentsMap = {};
+export let commentId = 0;
+export let userLikes = new Set();
+export let draggedEl = null;
+export let isDiscussionOpen = false;
+export let currentSlideIndex = 0;
+export let courseId = null;
+export let presentationId = null;
+
+// Make variables truly global for cross-module access
+window.commentsMap = commentsMap;
+window.commentId = commentId;
+window.userLikes = userLikes;
+window.draggedEl = draggedEl;
+window.isDiscussionOpen = isDiscussionOpen;
+window.currentSlideIndex = currentSlideIndex;
+window.courseId = courseId;
+window.presentationId = presentationId;
+
+// SVGs for like button
+export const LIKE_ICON_UNLIKED = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 22V10M7 10V5a3 3 0 0 1 3-3h4a2 2 0 0 1 2 2v2h3.28a2 2 0 0 1 1.98 2.22l-1.38 12A2 2 0 0 1 15.9 22H7z"/></svg>`;
+export const LIKE_ICON_LIKED = `<svg width="20" height="20" viewBox="0 0 128 128"><circle cx="64" cy="64" r="64" fill="#3b5998"/><path d="M36 104V56h12V40c0-6.627 5.373-12 12-12h16c4.418 0 8 3.582 8 8v8h12.56c3.314 0 6.044 2.687 5.92 6l-2.08 36c-.12 2.09-1.84 3.74-3.93 3.74H36z" fill="#fff"/></svg>`;
 
 export function createCommentEl(text) {
-  const id = "cmt" + (++commentId);
+  const id = "cmt" + (++window.commentId);
   const el = document.createElement("div");
   el.className = "comment";
   el.dataset.id = id;
@@ -15,49 +34,79 @@ export function createCommentEl(text) {
     <div class="comment-content">
       <div class="comment-text">${text}</div>
       <div class="comment-actions">
-        <button class="like-btn" onclick="like('${id}', this)">○ 0</button>
+        <button class="like-btn" onclick="like('${id}', this)">${LIKE_ICON_UNLIKED} 0</button>
         <button class="reply-btn" onclick="reply(this)">🗨️</button>
         <button class="remove-btn" onclick="removeComment('${id}', this)">❌</button>
       </div>
     </div>
   `;
-  commentsMap[id] = { id, text, likes: 0, replies: [], replyLikes: [], timestamp: Date.now() };
+  window.commentsMap[id] = { id, text, likes: 0, replies: [], replyLikes: [], timestamp: Date.now() };
   return el;
 }
 
 export function renderComment(id) {
-  const data = commentsMap[id];
+  const data = window.commentsMap[id];
   const el = document.createElement("div");
   el.className = "comment";
   el.dataset.id = id;
   
   // Determine like state and styling
-  const isLiked = userLikes.has(id);
+  const isLiked = window.userLikes.has(id);
   
-  const repliesHtml = data.replies.map((reply, index) => {
+  const repliesHtml = (data.replies || []).map((reply, index) => {
     const replyId = `${id}_reply_${index}`;
-    const isReplyLiked = userLikes.has(replyId);
-    const replyIcon = isReplyLiked ? '●' : '○';
+    const isReplyLiked = window.userLikes.has(replyId);
+    const replyIcon = isReplyLiked ? LIKE_ICON_LIKED : LIKE_ICON_UNLIKED;
+    
+    // Handle both old structure (string) and new structure (object)
+    let replyText = '';
+    let replyLikes = 0;
+    
+    if (typeof reply === 'string') {
+      replyText = reply;
+      replyLikes = data.replyLikes?.[index] || 0;
+    } else if (reply && typeof reply === 'object') {
+      // Handle new object structure with text and likes
+      replyText = reply.text || '';
+      replyLikes = reply.likes || 0;
+      
+      // If text is still missing, try other properties
+      if (!replyText) {
+        replyText = reply.toString() || '[Invalid reply]';
+      }
+    } else {
+      replyText = '[Invalid reply]';
+      replyLikes = 0;
+    }
+    
+    console.log('[DEBUG] Rendering reply:', { index, reply, replyText, replyLikes, replyType: typeof reply });
+    
     return `
       <div class="reply">
-        <div class="reply-text">${reply}</div>
+        <div class="reply-text">${replyText}</div>
         <div class="reply-actions">
-          <button class="like-btn ${isReplyLiked ? 'liked' : ''}" onclick="likeReply('${id}', ${index}, this)" style="color: ${isReplyLiked ? '#1877f2' : '#65676b'}">${replyIcon} ${data.replyLikes[index] || 0}</button>
+          <button class="like-btn ${isReplyLiked ? 'liked' : ''}" onclick="likeReply('${id}', ${index}, this)">${replyIcon} ${replyLikes}</button>
           <button class="remove-btn" onclick="removeReply('${id}', ${index}, this)">❌</button>
         </div>
       </div>
     `;
   }).join('');
   
-  const likeIcon = isLiked ? '●' : '○';
+  const likeIcon = isLiked ? LIKE_ICON_LIKED : LIKE_ICON_UNLIKED;
+  
+  // Use the actual like count from Firestore (should be accurate now)
+  const likeCount = data.likes || 0;
+  
+  console.log('[DEBUG] Rendering comment:', { id, text: data.text, likes: data.likes, likeCount, isLiked });
+  
   el.innerHTML = `
     <div class="comment-content">
       <div class="comment-text">${data.text}</div>
       <div class="comment-actions">
-        <button class="like-btn ${isLiked ? 'liked' : ''}" onclick="like('${id}', this)" style="color: ${isLiked ? '#1877f2' : '#65676b'}">${likeIcon} ${data.likes || 0}</button>
+        <button class="like-btn ${isLiked ? 'liked' : ''}" onclick="like('${id}', this)">${likeIcon} ${likeCount}</button>
         <button class="reply-btn" onclick="reply(this)">🗨️</button>
         <button class="remove-btn" onclick="removeComment('${id}', this)">❌</button>
-        ${data.replies.length > 0 ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : ''}
+        ${(data.replies || []).length > 0 ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : ''}
       </div>
     </div>
     <div class="replies-container" style="display: none;">
@@ -68,18 +117,18 @@ export function renderComment(id) {
 }
 
 export function like(id, el) {
-  const comment = commentsMap[id];
+  const comment = window.commentsMap[id];
   if (!comment) return;
   
-  const isLiked = userLikes.has(id);
+  const isLiked = window.userLikes.has(id);
   
   // Toggle like state for current user
   if (isLiked) {
-    userLikes.delete(id);
+    window.userLikes.delete(id);
     // Decrease like count
     comment.likes = Math.max(0, comment.likes - 1);
   } else {
-    userLikes.add(id);
+    window.userLikes.add(id);
     // Increase like count
     comment.likes = (comment.likes || 0) + 1;
   }
@@ -94,37 +143,29 @@ export function like(id, el) {
 
 // Helper function to update comment like UI
 function updateCommentLikeUI(commentId, el, isLiked) {
-  const comment = commentsMap[commentId];
+  const comment = window.commentsMap[commentId];
   if (!comment) return;
+  const icon = isLiked ? LIKE_ICON_LIKED : LIKE_ICON_UNLIKED;
   
-  // Update the like button appearance
+  // Use the actual like count from Firestore (should be accurate now)
+  const likeCount = comment.likes || 0;
+  
   const likeBtn = el || document.querySelector(`.comment[data-id='${commentId}'] .like-btn`);
   if (likeBtn) {
-    // Change icon based on like state - use different icons for liked vs unliked
-    const icon = isLiked ? '●' : '○';
-    likeBtn.innerHTML = `${icon} ${comment.likes || 0}`;
-    
-    // Add/remove liked class for styling
+    likeBtn.innerHTML = `${icon} ${likeCount}`;
     if (isLiked) {
       likeBtn.classList.add('liked');
-      likeBtn.style.color = '#1877f2'; // Facebook blue for liked
     } else {
       likeBtn.classList.remove('liked');
-      likeBtn.style.color = '#65676b'; // Grey for unliked
     }
   }
-  
-  // Update all instances of this comment (chat and groups)
   const allLikeBtns = document.querySelectorAll(`[data-id='${commentId}'] .like-btn`);
   allLikeBtns.forEach(btn => {
-    const icon = isLiked ? '●' : '○';
-    btn.innerHTML = `${icon} ${comment.likes || 0}`;
+    btn.innerHTML = `${icon} ${likeCount}`;
     if (isLiked) {
       btn.classList.add('liked');
-      btn.style.color = '#1877f2'; // Facebook blue for liked
     } else {
       btn.classList.remove('liked');
-      btn.style.color = '#65676b'; // Grey for unliked
     }
   });
 }
@@ -134,7 +175,7 @@ export function reply(btn) {
   if (!parent) return;
   
   const id = parent.dataset.id;
-  const replyIndex = commentsMap[id].replies.length;
+  const replyIndex = window.commentsMap[id].replies.length;
   
   // Remove any existing reply input
   const existingInput = document.querySelector('.reply-input');
@@ -176,7 +217,7 @@ export function removeComment(commentId, el) {
   if (comment) {
     comment.remove();
   }
-  delete commentsMap[commentId];
+  delete window.commentsMap[commentId];
   
   // Update Firestore
   window.deleteCommentFromFirestore(commentId);
@@ -186,9 +227,19 @@ export function removeComment(commentId, el) {
 }
 
 export function addComment() {
-  const input = document.getElementById("commentInput");
+  const input = document.getElementById("chatText");
+  if (!input) {
+    console.error('[ERROR] chatText input field not found');
+    return;
+  }
   const val = input.value.trim();
   if (!val) return;
+  
+  console.log('=== USER ADDING COMMENT ===');
+  console.log('[CommentManagement] Current Slide Index:', window.currentSlideIndex);
+  console.log('[CommentManagement] Comment Text:', val);
+  console.log('[CommentManagement] Course ID:', window.courseId);
+  console.log('[CommentManagement] Presentation ID:', window.presentationId);
   
   const commentData = {
     text: val,
@@ -198,31 +249,30 @@ export function addComment() {
     replyLikes: []
   };
   
-  const el = createCommentEl(val);
-  document.getElementById("commentList").appendChild(el);
+  console.log('[CommentManagement] Comment Data to Send:', JSON.stringify(commentData, null, 2));
   
-  // Add to Firestore
+  // Only add to Firestore - let the listener handle DOM updates
   window.addCommentToFirestore(commentData);
   
   input.value = "";
+  console.log('=== END USER ADDING COMMENT ===');
 }
 
 export function likeReply(id, index, el) {
-  const comment = commentsMap[id];
+  const comment = window.commentsMap[id];
   if (!comment || !comment.replies[index]) return;
   
   const replyId = `${id}_reply_${index}`;
-  const isLiked = userLikes.has(replyId);
+  const isLiked = window.userLikes.has(replyId);
+  
+  console.log('[DEBUG] likeReply called:', { id, index, replyId, isLiked });
+  console.log('[DEBUG] Current reply data:', comment.replies[index]);
   
   // Toggle like state for current user
   if (isLiked) {
-    userLikes.delete(replyId);
-    // Decrease like count
-    comment.replyLikes[index] = Math.max(0, (comment.replyLikes[index] || 1) - 1);
+    window.userLikes.delete(replyId);
   } else {
-    userLikes.add(replyId);
-    // Increase like count
-    comment.replyLikes[index] = (comment.replyLikes[index] || 0) + 1;
+    window.userLikes.add(replyId);
   }
   
   // Update Firestore with the new like state
@@ -234,37 +284,34 @@ export function likeReply(id, index, el) {
 
 // Helper function to update reply like UI
 function updateReplyLikeUI(commentId, replyIndex, el, isLiked) {
-  const comment = commentsMap[commentId];
+  const comment = window.commentsMap[commentId];
   if (!comment) return;
   
-  // Update the like button appearance
+  const reply = comment.replies[replyIndex];
+  if (!reply) return;
+  
+  const icon = isLiked ? LIKE_ICON_LIKED : LIKE_ICON_UNLIKED;
+  const likeCount = reply.likes || 0;
+  
+  console.log('[DEBUG] updateReplyLikeUI:', { commentId, replyIndex, isLiked, likeCount, reply });
+  
   const likeBtn = el || document.querySelector(`[data-id='${commentId}'] .reply:nth-child(${replyIndex + 1}) .like-btn`);
   if (likeBtn) {
-    // Change icon based on like state - use different icons for liked vs unliked
-    const icon = isLiked ? '●' : '○';
-    likeBtn.innerHTML = `${icon} ${comment.replyLikes[replyIndex] || 0}`;
-    
-    // Add/remove liked class for styling
+    likeBtn.innerHTML = `${icon} ${likeCount}`;
     if (isLiked) {
       likeBtn.classList.add('liked');
-      likeBtn.style.color = '#1877f2'; // Facebook blue for liked
     } else {
       likeBtn.classList.remove('liked');
-      likeBtn.style.color = '#65676b'; // Grey for unliked
     }
   }
   
-  // Update all instances of this reply (chat and groups)
   const allReplyLikeBtns = document.querySelectorAll(`[data-id='${commentId}'] .reply:nth-child(${replyIndex + 1}) .like-btn`);
   allReplyLikeBtns.forEach(btn => {
-    const icon = isLiked ? '●' : '○';
-    btn.innerHTML = `${icon} ${comment.replyLikes[replyIndex] || 0}`;
+    btn.innerHTML = `${icon} ${likeCount}`;
     if (isLiked) {
       btn.classList.add('liked');
-      btn.style.color = '#1877f2'; // Facebook blue for liked
     } else {
       btn.classList.remove('liked');
-      btn.style.color = '#65676b'; // Grey for unliked
     }
   });
 }
@@ -273,7 +320,7 @@ export function removeFromGroup(commentId, el) {
   const group = el.closest('.note-box');
   if (!group) return;
   
-  const data = commentsMap[commentId];
+  const data = window.commentsMap[commentId];
   if (!data) return;
   
   // Remove from group
@@ -292,83 +339,70 @@ export function removeFromGroup(commentId, el) {
 }
 
 export function updateCommentLikes(commentId, likeCount) {
-  const comment = commentsMap[commentId];
+  const comment = window.commentsMap[commentId];
   if (!comment) return;
-  
-  // Update the like count in the data
   comment.likes = likeCount;
-  
-  // Determine like state and styling
-  const isLiked = userLikes.has(commentId);
-  const likeIcon = isLiked ? '●' : '○';
-  
-  // Update chat comment likes
+  const isLiked = window.userLikes.has(commentId);
+  const likeIcon = isLiked ? LIKE_ICON_LIKED : LIKE_ICON_UNLIKED;
   const chatComment = document.querySelector(`.comment[data-id='${commentId}'] .like-btn`);
   if (chatComment) {
     chatComment.innerHTML = `${likeIcon} ${likeCount}`;
     if (isLiked) {
       chatComment.classList.add('liked');
-      chatComment.style.color = '#1877f2'; // Facebook blue for liked
     } else {
       chatComment.classList.remove('liked');
-      chatComment.style.color = '#65676b'; // Grey for unliked
     }
   }
-  
-  // Update group comment likes
   const groupComments = document.querySelectorAll(`.note-box li[data-id='${commentId}'] .like-btn`);
   groupComments.forEach(btn => {
     btn.innerHTML = `${likeIcon} ${likeCount}`;
     if (isLiked) {
       btn.classList.add('liked');
-      btn.style.color = '#1877f2'; // Facebook blue for liked
     } else {
       btn.classList.remove('liked');
-      btn.style.color = '#65676b'; // Grey for unliked
     }
   });
 }
 
 export function updateReplyLikes(commentId, replyIndex, likeCount) {
-  const comment = commentsMap[commentId];
+  const comment = window.commentsMap[commentId];
   if (!comment) return;
   
-  // Update the like count in the data
-  comment.replyLikes[replyIndex] = likeCount;
+  const reply = comment.replies[replyIndex];
+  if (!reply) return;
+  
+  // Update the reply's like count
+  reply.likes = likeCount;
   
   const replyId = `${commentId}_reply_${replyIndex}`;
-  const isLiked = userLikes.has(replyId);
-  const likeIcon = isLiked ? '●' : '○';
+  const isLiked = window.userLikes.has(replyId);
+  const likeIcon = isLiked ? LIKE_ICON_LIKED : LIKE_ICON_UNLIKED;
   
-  // Update chat reply likes
+  console.log('[DEBUG] updateReplyLikes:', { commentId, replyIndex, likeCount, isLiked, reply });
+  
   const chatReplies = document.querySelectorAll(`.comment[data-id='${commentId}'] .reply:nth-child(${replyIndex + 1}) .like-btn`);
   chatReplies.forEach(btn => {
     btn.innerHTML = `${likeIcon} ${likeCount}`;
     if (isLiked) {
       btn.classList.add('liked');
-      btn.style.color = '#1877f2'; // Facebook blue for liked
     } else {
       btn.classList.remove('liked');
-      btn.style.color = '#65676b'; // Grey for unliked
     }
   });
   
-  // Update group reply likes
   const groupReplies = document.querySelectorAll(`.note-box li[data-id='${commentId}'] .reply:nth-child(${replyIndex + 1}) .like-btn`);
   groupReplies.forEach(btn => {
     btn.innerHTML = `${likeIcon} ${likeCount}`;
     if (isLiked) {
       btn.classList.add('liked');
-      btn.style.color = '#1877f2'; // Facebook blue for liked
     } else {
       btn.classList.remove('liked');
-      btn.style.color = '#65676b'; // Grey for unliked
     }
   });
 }
 
 export function updateAllCommentReplies(commentId) {
-  const comment = commentsMap[commentId];
+  const comment = window.commentsMap[commentId];
   if (!comment || comment.replies.length === 0) return;
   
   // Update chat comment replies
@@ -400,27 +434,47 @@ export function updateAllCommentReplies(commentId) {
 
 // Helper functions that need to be exposed globally
 export function saveReply(commentId, replyIndex, btn) {
-  const input = btn.parentElement.querySelector('input');
-  const replyText = input.value.trim();
+  const replyInput = btn.parentElement.querySelector('input');
+  if (!replyInput) return;
+  
+  const replyText = replyInput.value.trim();
   if (!replyText) return;
   
-  const comment = commentsMap[commentId];
+  const comment = window.commentsMap[commentId];
   if (!comment) return;
   
-  comment.replies[replyIndex] = replyText;
-  if (!comment.replyLikes[replyIndex]) {
-    comment.replyLikes[replyIndex] = 0;
-  }
+  // Add reply to local data
+  if (!comment.replies) comment.replies = [];
   
-  // Update Firestore
-  window.updateCommentInFirestore(commentId, { replies: comment.replies, replyLikes: comment.replyLikes });
+  // Create reply object with proper structure
+  const replyObject = {
+    text: replyText,
+    timestamp: Date.now(),
+    userId: window.getUserId(),
+    likes: 0,
+    likedUsers: []
+  };
   
-  // Update UI
+  comment.replies[replyIndex] = replyObject;
+  
+  // Update Firestore with the new reply
+  window.updateCommentInFirestore(commentId, { replies: comment.replies });
+  
+  // Remove input and update UI
+  replyInput.remove();
   window.updateAllCommentReplies(commentId);
   window.updateAllGroupLikes();
   
-  // Remove input
-  btn.parentElement.remove();
+  // Ensure replies container is visible and toggle button shows [-]
+  const commentEl = document.querySelector(`[data-id="${commentId}"]`);
+  if (commentEl) {
+    const toggleBtn = commentEl.querySelector('.toggle-replies');
+    const repliesContainer = commentEl.querySelector('.replies-container');
+    if (toggleBtn && repliesContainer) {
+      repliesContainer.style.display = 'block';
+      toggleBtn.textContent = '[-]';
+    }
+  }
 }
 
 export function cancelReply(btn) {
@@ -428,7 +482,27 @@ export function cancelReply(btn) {
 }
 
 export function toggleReplies(toggle) {
-  const repliesContainer = toggle.parentElement.nextElementSibling;
+  if (!toggle || !toggle.parentElement) {
+    console.error('[ERROR] toggleReplies: Invalid toggle element');
+    return;
+  }
+  
+  // Find the replies container - it's the next sibling of the comment-content div
+  const commentActions = toggle.parentElement; // comment-actions
+  const commentContent = commentActions.parentElement; // comment-content
+  const repliesContainer = commentContent.nextElementSibling; // replies-container
+  
+  if (!repliesContainer || !repliesContainer.classList.contains('replies-container')) {
+    console.error('[ERROR] toggleReplies: repliesContainer not found');
+    console.error('[DEBUG] toggleReplies: DOM structure:', {
+      toggle: toggle,
+      commentActions: commentActions,
+      commentContent: commentContent,
+      repliesContainer: repliesContainer
+    });
+    return;
+  }
+  
   if (repliesContainer.style.display === 'none') {
     repliesContainer.style.display = 'block';
     toggle.textContent = '[-]';
@@ -439,7 +513,7 @@ export function toggleReplies(toggle) {
 }
 
 export function removeReply(commentId, replyIndex, btn) {
-  const comment = commentsMap[commentId];
+  const comment = window.commentsMap[commentId];
   if (!comment) return;
   
   comment.replies.splice(replyIndex, 1);
@@ -457,16 +531,15 @@ export function removeReply(commentId, replyIndex, btn) {
 }
 
 // Initialize global variables
-export function initializeCommentManagement(initialCommentsMap, initialCommentId, initialUserLikes) {
-  commentsMap = initialCommentsMap;
-  commentId = initialCommentId;
-  userLikes = initialUserLikes;
+export function initializeCommentManagement() {
+  // Variables are already exported and accessible
+  console.log('[DEBUG] CommentManagement initialized with shared variables');
 }
 
 // Sync user likes from Firestore
 export function syncUserLikesFromFirestore(likesData) {
   // Clear current user likes
-  userLikes.clear();
+  window.userLikes.clear();
   
   // Add likes from Firestore data
   if (likesData && Array.isArray(likesData)) {
@@ -476,22 +549,22 @@ export function syncUserLikesFromFirestore(likesData) {
       
       // Only add if this is the current user's like
       if (likeUserId === currentUserId) {
-        userLikes.add(targetId);
+        window.userLikes.add(targetId);
       }
     });
   }
   
   // Update all UI elements to reflect the new like states
-  Object.keys(commentsMap).forEach(commentId => {
-    const isLiked = userLikes.has(commentId);
+  Object.keys(window.commentsMap).forEach(commentId => {
+    const isLiked = window.userLikes.has(commentId);
     updateCommentLikeUI(commentId, null, isLiked);
     
     // Update reply likes
-    const comment = commentsMap[commentId];
+    const comment = window.commentsMap[commentId];
     if (comment && comment.replies) {
       comment.replies.forEach((reply, index) => {
         const replyId = `${commentId}_reply_${index}`;
-        const isReplyLiked = userLikes.has(replyId);
+        const isReplyLiked = window.userLikes.has(replyId);
         updateReplyLikeUI(commentId, index, null, isReplyLiked);
       });
     }
@@ -504,18 +577,17 @@ export function addLikeToUI(likeData) {
   const currentUserId = window.getUserId();
   
   // Check if this is a comment like
-  if (commentsMap[targetId]) {
-    // Update comment like count
-    const comment = commentsMap[targetId];
-    comment.likes = (comment.likes || 0) + 1;
+  if (window.commentsMap[targetId]) {
+    const comment = window.commentsMap[targetId];
     
     // If this is the current user's like, add to userLikes set
     if (userId === currentUserId) {
-      userLikes.add(targetId);
+      window.userLikes.add(targetId);
+      console.log('[DEBUG] Added current user like to userLikes:', targetId);
     }
     
-    // Update UI
-    const isLiked = userLikes.has(targetId);
+    // Update UI - the like count should come from the comment data itself
+    const isLiked = window.userLikes.has(targetId);
     updateCommentLikeUI(targetId, null, isLiked);
     window.updateAllGroupLikes();
   }
@@ -524,21 +596,45 @@ export function addLikeToUI(likeData) {
   const replyMatch = targetId.match(/^(.+)_reply_(\d+)$/);
   if (replyMatch) {
     const [_, commentId, replyIndex] = replyMatch;
-    const comment = commentsMap[commentId];
+    const comment = window.commentsMap[commentId];
     if (comment && comment.replies[replyIndex]) {
-      // Update reply like count
-      comment.replyLikes[replyIndex] = (comment.replyLikes[replyIndex] || 0) + 1;
-      
       // If this is the current user's like, add to userLikes set
       if (userId === currentUserId) {
-        userLikes.add(targetId);
+        window.userLikes.add(targetId);
+        console.log('[DEBUG] Added current user reply like to userLikes:', targetId);
       }
       
-      // Update UI
-      const isLiked = userLikes.has(targetId);
+      // Update UI - the like count should come from the reply data itself
+      const isLiked = window.userLikes.has(targetId);
       updateReplyLikeUI(commentId, parseInt(replyIndex), null, isLiked);
     }
   }
+}
+
+// Function to update all comment like states after likes are loaded
+export function updateAllCommentLikeStates() {
+  console.log('[DEBUG] Updating all comment like states...');
+  console.log('[DEBUG] Current userLikes:', Array.from(window.userLikes));
+  
+  Object.keys(window.commentsMap).forEach(commentId => {
+    const comment = window.commentsMap[commentId];
+    const isLiked = window.userLikes.has(commentId);
+    
+    // Update comment like UI
+    updateCommentLikeUI(commentId, null, isLiked);
+    
+    // Update reply like states
+    if (comment.replies) {
+      comment.replies.forEach((reply, index) => {
+        const replyId = `${commentId}_reply_${index}`;
+        const isReplyLiked = window.userLikes.has(replyId);
+        updateReplyLikeUI(commentId, index, null, isReplyLiked);
+      });
+    }
+  });
+  
+  // Update group likes as well
+  window.updateAllGroupLikes();
 }
 
 export function removeLikeFromUI(likeData) {
@@ -546,18 +642,17 @@ export function removeLikeFromUI(likeData) {
   const currentUserId = window.getUserId();
   
   // Check if this is a comment like
-  if (commentsMap[targetId]) {
-    // Update comment like count
-    const comment = commentsMap[targetId];
-    comment.likes = Math.max(0, (comment.likes || 1) - 1);
+  if (window.commentsMap[targetId]) {
+    const comment = window.commentsMap[targetId];
     
     // If this is the current user's like, remove from userLikes set
     if (userId === currentUserId) {
-      userLikes.delete(targetId);
+      window.userLikes.delete(targetId);
+      console.log('[DEBUG] Removed current user like from userLikes:', targetId);
     }
     
-    // Update UI
-    const isLiked = userLikes.has(targetId);
+    // Update UI - the like count should come from the comment data itself
+    const isLiked = window.userLikes.has(targetId);
     updateCommentLikeUI(targetId, null, isLiked);
     window.updateAllGroupLikes();
   }
@@ -566,18 +661,16 @@ export function removeLikeFromUI(likeData) {
   const replyMatch = targetId.match(/^(.+)_reply_(\d+)$/);
   if (replyMatch) {
     const [_, commentId, replyIndex] = replyMatch;
-    const comment = commentsMap[commentId];
+    const comment = window.commentsMap[commentId];
     if (comment && comment.replies[replyIndex]) {
-      // Update reply like count
-      comment.replyLikes[replyIndex] = Math.max(0, (comment.replyLikes[replyIndex] || 1) - 1);
-      
       // If this is the current user's like, remove from userLikes set
       if (userId === currentUserId) {
-        userLikes.delete(targetId);
+        window.userLikes.delete(targetId);
+        console.log('[DEBUG] Removed current user reply like from userLikes:', targetId);
       }
       
-      // Update UI
-      const isLiked = userLikes.has(targetId);
+      // Update UI - the like count should come from the reply data itself
+      const isLiked = window.userLikes.has(targetId);
       updateReplyLikeUI(commentId, parseInt(replyIndex), null, isLiked);
     }
   }

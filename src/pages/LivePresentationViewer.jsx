@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { onSnapshot, doc, collection, query, orderBy, updateDoc, getDoc, addDoc, deleteDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import './LivePresentationViewer.css';
+import * as CommentManagement from './commentManagement.js';
 
 // Utility to get or generate a stable anonId for anonymous users
 function getAnonId() {
@@ -36,7 +37,7 @@ const LivePresentationViewer = () => {
   const [firestoreInitialized, setFirestoreInitialized] = useState(false);
 
   // Version tracking
-  const VERSION = "V1.4.35";
+  const VERSION = "V1.4.75";
   
   // Track groups being deleted to prevent re-adding from Firestore
   const groupsBeingDeleted = new Set();
@@ -1076,6 +1077,9 @@ const LivePresentationViewer = () => {
     let isDiscussionOpen = false;
     let userLikes = new Set();
 
+    // Initialize comment management module
+    CommentManagement.initializeCommentManagement(commentsMap, commentId, userLikes);
+
       // Make functions globally available
   window.toggleDiscussion = toggleDiscussion;
   window.addComment = addComment;
@@ -1105,6 +1109,11 @@ const LivePresentationViewer = () => {
     console.log('[DEBUG] saveGroupToFirestore called with:', groupData);
     return addGroupToFirestore(groupData);
   };
+
+  // Add comment management helper functions to window
+  window.saveReply = CommentManagement.saveReply;
+  window.cancelReply = CommentManagement.cancelReply;
+  window.removeReply = CommentManagement.removeReply;
 
     // Set up drop event listeners in initVanillaJS
     console.log('[DEBUG] initVanillaJS: Starting drop event listener setup');
@@ -1800,198 +1809,31 @@ const LivePresentationViewer = () => {
 
 
     function createCommentEl(text) {
-      const id = "cmt" + (++commentId);
-      commentsMap[id] = { text, likes: 0, replies: [], replyLikes: [], timestamp: Date.now(), grouped: false };
-      return renderComment(id);
+      return CommentManagement.createCommentEl(text);
     }
 
     function renderComment(id) {
-      const data = commentsMap[id];
-      const el = document.createElement("div");
-      el.className = "comment";
-      if (data.grouped) el.classList.add("grouped");
-      el.draggable = true;
-      el.dataset.type = "comment";
-      el.dataset.id = id;
-      
-      const hasReplies = data.replies.length > 0;
-      const replyToggle = hasReplies ? `<span class="toggle-replies" onclick="toggleReplies(this)">[+]</span>` : '';
-      const isLiked = userLikes.has(id);
-      const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
-      
-      el.innerHTML = `
-        <div class="text">
-          <div class="comment-text">${data.text}</div>
-          <div class="comment-actions">
-            <span class="${likeClass}" onclick="like('${id}', this)">👍 ${data.likes}</span>
-            <button class="reply-btn" onclick="reply(this)">Reply</button>
-            <button class="remove-btn" onclick="removeComment('${id}', this)">×</button>
-            ${replyToggle}
-          </div>
-        </div>
-      `;
-      
-      // Add replies container if there are replies
-      if (hasReplies) {
-        const repliesContainer = document.createElement('div');
-        repliesContainer.className = 'replies-container';
-        repliesContainer.innerHTML = data.replies.map((r, i) => {
-          const replyId = `${id}_reply_${i}`;
-          const isReplyLiked = userLikes.has(replyId);
-          const replyLikeClass = isReplyLiked ? 'like-btn liked' : 'like-btn';
-          return `<div class="reply">
-            <div class="reply-text">${r}</div>
-            <span class="${replyLikeClass}" onclick="likeReply('${id}', ${i}, this)">👍 ${data.replyLikes[i] || 0}</span>
-          </div>`;
-        }).join('');
-        el.appendChild(repliesContainer);
-      }
-      
-      el.addEventListener("dragstart", e => {
-        console.log('[DEBUG] Dragstart event triggered for comment:', id);
-        console.log('[DEBUG] draggedEl before setting:', draggedEl);
-        draggedEl = el;
-        console.log('[DEBUG] draggedEl after setting:', el);
-        console.log('[DEBUG] draggedEl.dataset.id:', el.dataset.id);
-      });
-      return el;
+      return CommentManagement.renderComment(id);
     }
 
     function like(id, el) {
-      if (!commentsMap[id]) return;
-      
-      const isLiked = userLikes.has(id);
-      if (isLiked) {
-        // Unlike
-        userLikes.delete(id);
-        commentsMap[id].likes = Math.max(0, commentsMap[id].likes - 1);
-        el.classList.remove('liked');
-      } else {
-        // Like
-        userLikes.add(id);
-        commentsMap[id].likes++;
-        el.classList.add('liked');
-      }
-      
-      // Update Firestore
-      window.updateLikeInFirestore(id, 'comment', !isLiked);
-      
-      // Update all instances of this comment (chat panel and groups)
-      updateCommentLikes(id, commentsMap[id].likes);
-      updateAllGroupLikes();
+      CommentManagement.like(id, el);
     }
 
     function reply(btn) {
-      const parent = btn.closest(".comment, li");
-      const id = parent.dataset.id;
-      const input = document.createElement("input");
-      input.className = "reply";
-      input.placeholder = "Reply...";
-      input.onkeydown = e => {
-        if (e.key === "Enter" && input.value.trim()) {
-          const replyText = input.value.trim();
-          const replyIndex = commentsMap[id].replies.length;
-          
-          // Update local state first
-          commentsMap[id].replies.push(replyText);
-          commentsMap[id].replyLikes.push(0);
-          
-          // Update Firestore
-          window.updateCommentInFirestore(id, {
-            replies: commentsMap[id].replies,
-            replyLikes: commentsMap[id].replyLikes
-          });
-          
-          // Find or create replies container
-          let repliesContainer = parent.querySelector('.replies-container');
-          if (!repliesContainer) {
-            repliesContainer = document.createElement('div');
-            repliesContainer.className = 'replies-container';
-            // For group comments, append to comment-content div
-            const targetElement = parent.tagName === 'LI' 
-              ? parent.querySelector('.comment-content') 
-              : parent;
-            targetElement.appendChild(repliesContainer);
-          }
-          
-          const replyDiv = document.createElement("div");
-          replyDiv.className = "reply";
-          replyDiv.innerHTML = `<div class="reply-text">${replyText}</div>
-            <span class="like-btn" onclick="likeReply('${id}', ${replyIndex}, this)">👍 0</span>`;
-          repliesContainer.appendChild(replyDiv);
-          input.remove();
-          updateAllGroupLikes();
-          updateGroupReplies(id);
-          
-          // Update all instances of this comment to show the new reply
-          updateAllCommentReplies(id);
-        }
-      };
-      parent.appendChild(input);
-      input.focus();
+      CommentManagement.reply(btn);
     }
 
     function removeComment(commentId, el) {
-      const comment = el.closest('.comment');
-      comment.remove();
-      delete commentsMap[commentId];
-      
-      // Remove from Firestore
-      window.deleteCommentFromFirestore(commentId);
+      CommentManagement.removeComment(commentId, el);
     }
 
     function addComment() {
-      const val = document.getElementById("chatText").value.trim();
-      if (!val) return;
-      
-      // Clear input immediately for better UX
-      document.getElementById("chatText").value = "";
-      
-      // Create comment data
-      const commentData = {
-        text: val,
-        likes: 0,
-        replies: [],
-        replyLikes: [],
-        timestamp: Date.now()
-      };
-      
-      // Add to Firestore - the Firestore listener will handle adding to UI
-      window.addCommentToFirestore(commentData).then(firestoreId => {
-        if (firestoreId) {
-          console.log('[UI] Comment sent to Firestore with ID:', firestoreId);
-        } else {
-          // Fallback to local-only if Firestore fails
-          const el = createCommentEl(val);
-          document.getElementById("commentList").appendChild(el);
-          console.log('[UI] Comment added locally (Firestore failed)');
-        }
-      });
+      CommentManagement.addComment();
     }
 
     function likeReply(id, index, el) {
-      if (!commentsMap[id] || !commentsMap[id].replies[index]) return;
-      
-      const replyId = `${id}_reply_${index}`;
-      const isLiked = userLikes.has(replyId);
-      
-      if (isLiked) {
-        // Unlike
-        userLikes.delete(replyId);
-        commentsMap[id].replyLikes[index] = Math.max(0, commentsMap[id].replyLikes[index] - 1);
-        el.classList.remove('liked');
-      } else {
-        // Like
-        userLikes.add(replyId);
-        commentsMap[id].replyLikes[index] = (commentsMap[id].replyLikes[index] || 0) + 1;
-        el.classList.add('liked');
-      }
-      
-      // Update Firestore
-      window.updateLikeInFirestore(replyId, 'reply', !isLiked);
-      
-      // Update all instances of this reply
-      updateReplyLikes(id, index, commentsMap[id].replyLikes[index]);
+      CommentManagement.likeReply(id, index, el);
     }
 
     const slide = document.getElementById("slideArea");
@@ -2016,31 +1858,7 @@ const LivePresentationViewer = () => {
     // The drop event listener is now only in toggleDiscussion function
 
     function removeFromGroup(commentId, el) {
-      const li = el.closest('li');
-      const group = li.closest('.note-box');
-      
-      // Remove from group
-      li.remove();
-      
-      // Update Firestore using manageGroupData
-      const groupId = group.dataset.groupId;
-      if (groupId && !groupId.startsWith('group_')) {
-        manageGroupData('remove_comment', group, { commentId });
-      }
-      
-      // Update comment state
-      const data = commentsMap[commentId];
-      data.grouped = false;
-      
-      // Update chat panel - remove grouped class from original comment
-      const chatList = document.getElementById("commentList");
-      const existing = chatList.querySelector(`.comment[data-id='${commentId}']`);
-      if (existing) {
-        existing.classList.remove("grouped");
-      }
-      
-      updateGroupLikes(group);
-      updateGroupReplies(commentId);
+      CommentManagement.removeFromGroup(commentId, el);
     }
 
     function removeGroup(el) {
@@ -2181,128 +1999,19 @@ const LivePresentationViewer = () => {
     }
 
     function updateCommentLikes(commentId, likeCount) {
-      // Update like count in chat panel
-      const chatComment = document.querySelector(`.comment[data-id='${commentId}'] .like-btn`);
-      if (chatComment) {
-        chatComment.innerText = `👍 ${likeCount}`;
-        if (userLikes.has(commentId)) {
-          chatComment.classList.add('liked');
-        } else {
-          chatComment.classList.remove('liked');
-        }
-      }
-      
-      // Update like count in all groups
-      const groupComments = document.querySelectorAll(`.note-box li[data-id='${commentId}'] .like-btn`);
-      groupComments.forEach(likeBtn => {
-        likeBtn.innerText = `👍 ${likeCount}`;
-        if (userLikes.has(commentId)) {
-          likeBtn.classList.add('liked');
-        } else {
-          likeBtn.classList.remove('liked');
-        }
-      });
+      CommentManagement.updateCommentLikes(commentId, likeCount);
     }
 
     function updateReplyLikes(commentId, replyIndex, likeCount) {
-      const replyId = `${commentId}_reply_${replyIndex}`;
-      
-      // Update reply likes in chat panel
-      const chatReplies = document.querySelectorAll(`.comment[data-id='${commentId}'] .reply:nth-child(${replyIndex + 1}) .like-btn`);
-      chatReplies.forEach(likeBtn => {
-        likeBtn.innerText = `👍 ${likeCount}`;
-        if (userLikes.has(replyId)) {
-          likeBtn.classList.add('liked');
-        } else {
-          likeBtn.classList.remove('liked');
-        }
-      });
-      
-      // Update reply likes in all groups
-      const groupReplies = document.querySelectorAll(`.note-box li[data-id='${commentId}'] .reply:nth-child(${replyIndex + 1}) .like-btn`);
-      groupReplies.forEach(likeBtn => {
-        likeBtn.innerText = `👍 ${likeCount}`;
-        if (userLikes.has(replyId)) {
-          likeBtn.classList.add('liked');
-        } else {
-          likeBtn.classList.remove('liked');
-        }
-      });
+      CommentManagement.updateReplyLikes(commentId, replyIndex, likeCount);
     }
 
     function toggleReplies(el) {
-      // Find the parent comment element (could be li for groups or div for chat)
-      const commentElement = el.closest('li, .comment');
-      if (!commentElement) {
-        console.error('toggleReplies: Could not find parent comment element');
-        return;
-      }
-      
-      const commentId = commentElement.dataset.id;
-      if (!commentId) {
-        console.error('toggleReplies: Could not find comment ID');
-        return;
-      }
-      
-      const comment = commentsMap[commentId];
-      if (!comment || !comment.replies) return;
-
-      // For group comments (li elements), append to the comment-content div
-      // For chat comments (div elements), append directly to the comment element
-      const targetElement = commentElement.tagName === 'LI' 
-        ? commentElement.querySelector('.comment-content') 
-        : commentElement;
-
-      const existingReplies = targetElement.querySelector('.replies-container');
-      if (existingReplies) {
-        existingReplies.remove();
-        el.innerText = '[+]';
-      } else {
-        const repliesContainer = document.createElement('div');
-        repliesContainer.className = 'replies-container';
-        repliesContainer.innerHTML = comment.replies.map((reply, i) => {
-          const replyId = `${commentId}_reply_${i}`;
-          const isLiked = userLikes.has(replyId);
-          const likeClass = isLiked ? 'like-btn liked' : 'like-btn';
-          return `<div class="reply">
-            <div class="reply-text">${reply}</div>
-            <span class="${likeClass}" onclick="likeReply('${commentId}', ${i}, this)">👍 ${comment.replyLikes[i] || 0}</span>
-          </div>`;
-        }).join('');
-        targetElement.appendChild(repliesContainer);
-        el.innerText = '[-]';
-      }
+      CommentManagement.toggleReplies(el);
     }
 
     function updateAllCommentReplies(commentId) {
-      const comment = commentsMap[commentId];
-      if (!comment) return;
-      
-      // Update reply toggle in chat panel
-      const chatComment = document.querySelector(`.comment[data-id='${commentId}']`);
-      if (chatComment) {
-        const existingToggle = chatComment.querySelector(".toggle-replies");
-        if (comment.replies.length > 0 && !existingToggle) {
-          const replyToggle = document.createElement("span");
-          replyToggle.className = "toggle-replies";
-          replyToggle.innerText = "[+]";
-          replyToggle.setAttribute("onclick", "toggleReplies(this)");
-          chatComment.querySelector('.comment-actions').appendChild(replyToggle);
-        }
-      }
-      
-      // Update reply toggle in all groups
-      const groupComments = document.querySelectorAll(`.note-box li[data-id='${commentId}']`);
-      groupComments.forEach(li => {
-        const existingToggle = li.querySelector(".toggle-replies");
-        if (comment.replies.length > 0 && !existingToggle) {
-          const replyToggle = document.createElement("span");
-          replyToggle.className = "toggle-replies";
-          replyToggle.innerText = "[+]";
-          replyToggle.setAttribute("onclick", "toggleReplies(this)");
-          li.querySelector('.comment-actions').appendChild(replyToggle);
-        }
-      });
+      CommentManagement.updateAllCommentReplies(commentId);
     }
 
     // Initialize with existing data from Firestore (if any)

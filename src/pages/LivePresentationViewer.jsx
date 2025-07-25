@@ -37,7 +37,7 @@ const LivePresentationViewer = () => {
   const [firestoreInitialized, setFirestoreInitialized] = useState(false);
 
   // Version tracking
-  const VERSION = "V1.4.75";
+  const VERSION = "V1.4.76";
   
   // Track groups being deleted to prevent re-adding from Firestore
   const groupsBeingDeleted = new Set();
@@ -1114,6 +1114,12 @@ const LivePresentationViewer = () => {
   window.saveReply = CommentManagement.saveReply;
   window.cancelReply = CommentManagement.cancelReply;
   window.removeReply = CommentManagement.removeReply;
+  
+  // Add comment management UI update functions to window
+  window.updateCommentLikes = updateCommentLikes;
+  window.updateReplyLikes = updateReplyLikes;
+  window.updateAllCommentReplies = updateAllCommentReplies;
+  window.updateAllGroupLikes = updateAllGroupLikes;
 
     // Set up drop event listeners in initVanillaJS
     console.log('[DEBUG] initVanillaJS: Starting drop event listener setup');

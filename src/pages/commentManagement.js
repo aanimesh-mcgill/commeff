@@ -177,6 +177,18 @@ export function reply(btn) {
   const id = parent.dataset.id;
   const replyIndex = window.commentsMap[id].replies.length;
   
+  // Ensure replies container is open before adding reply input
+  const toggleBtn = parent.querySelector('.toggle-replies');
+  const repliesContainer = parent.querySelector('.replies-container');
+  
+  if (toggleBtn && repliesContainer) {
+    // If replies container is closed, open it
+    if (repliesContainer.style.display === 'none') {
+      repliesContainer.style.display = 'block';
+      toggleBtn.textContent = '[-]';
+    }
+  }
+  
   // Remove any existing reply input
   const existingInput = document.querySelector('.reply-input');
   if (existingInput) {
@@ -460,21 +472,25 @@ export function saveReply(commentId, replyIndex, btn) {
   // Update Firestore with the new reply
   window.updateCommentInFirestore(commentId, { replies: comment.replies });
   
-  // Remove input and update UI
+  // Remove input
   replyInput.remove();
-  window.updateAllCommentReplies(commentId);
+  
+  // Update group likes (but don't call updateAllCommentReplies as it might reset toggle state)
   window.updateAllGroupLikes();
   
-  // Ensure replies container is visible and toggle button shows [-]
-  const commentEl = document.querySelector(`[data-id="${commentId}"]`);
-  if (commentEl) {
-    const toggleBtn = commentEl.querySelector('.toggle-replies');
-    const repliesContainer = commentEl.querySelector('.replies-container');
-    if (toggleBtn && repliesContainer) {
-      repliesContainer.style.display = 'block';
-      toggleBtn.textContent = '[-]';
+  // Ensure replies container stays open and toggle button shows [-]
+  // Use setTimeout to ensure this runs after any DOM updates
+  setTimeout(() => {
+    const commentEl = document.querySelector(`[data-id="${commentId}"]`);
+    if (commentEl) {
+      const toggleBtn = commentEl.querySelector('.toggle-replies');
+      const repliesContainer = commentEl.querySelector('.replies-container');
+      if (toggleBtn && repliesContainer) {
+        repliesContainer.style.display = 'block';
+        toggleBtn.textContent = '[-]';
+      }
     }
-  }
+  }, 100);
 }
 
 export function cancelReply(btn) {

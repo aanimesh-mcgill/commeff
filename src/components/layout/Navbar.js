@@ -9,7 +9,8 @@ import {
   X, 
   Settings,
   Home,
-  GraduationCap
+  GraduationCap,
+  BarChart3
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -38,7 +39,8 @@ const Navbar = () => {
     { name: 'Home', path: '/', icon: Home },
     { name: 'Courses', path: '/courses', icon: BookOpen },
     ...(userProfile?.role === 'instructor' ? [
-      { name: 'My Courses', path: '/my-courses', icon: GraduationCap }
+      { name: 'My Courses', path: '/my-courses', icon: GraduationCap },
+      { name: 'Dashboard', path: '/dashboard', icon: BarChart3 }
     ] : [])
   ];
 

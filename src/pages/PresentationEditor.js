@@ -1,10 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
-import { Loader, ArrowLeft, Plus } from 'lucide-react';
+import { useParams } from 'react-router-dom';
+import { Loader, Plus } from 'lucide-react';
 import ReactQuill from 'react-quill';
 import 'react-quill/dist/quill.snow.css';
 import SlideService from '../services/SlideService';
-import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 
 const SLIDE_TEMPLATES = [
   { type: 'title', label: 'Title Template', content: { header: '', content: '' } },
@@ -39,14 +38,11 @@ const SLIDE_HEIGHT = 720;
 
 const PresentationEditor = () => {
   const { courseId, presentationId } = useParams();
-  const navigate = useNavigate();
   const [slides, setSlides] = useState([]);
   const [slideIds, setSlideIds] = useState([]);
   const [selectedSlide, setSelectedSlide] = useState(0);
   const [loading, setLoading] = useState(true);
   const [template, setTemplate] = useState('title');
-  // Track last selected slide for auto-save
-  const [lastSelectedSlide, setLastSelectedSlide] = useState(0);
 
   useEffect(() => {
     const fetchSlides = async () => {
@@ -99,30 +95,7 @@ const PresentationEditor = () => {
     setSelectedSlide(prev => Math.max(0, prev === idx ? prev - 1 : prev > idx ? prev - 1 : prev));
   };
 
-  // Drag-and-drop reorder
-  const onDragEnd = async (result) => {
-    if (!result.destination) return;
-    const from = result.source.index;
-    const to = result.destination.index;
-    if (from === to) return;
-    const newSlides = Array.from(slides);
-    const newSlideIds = Array.from(slideIds);
-    const [removedSlide] = newSlides.splice(from, 1);
-    const [removedId] = newSlideIds.splice(from, 1);
-    newSlides.splice(to, 0, removedSlide);
-    newSlideIds.splice(to, 0, removedId);
-    setSlides(newSlides);
-    setSlideIds(newSlideIds);
-    setSelectedSlide(to);
-    // Persist order in Firestore
-    const slideIdOrderPairs = newSlideIds.map((id, idx) => ({ id, order: idx }));
-    try {
-      await SlideService.updateSlideOrders(courseId, presentationId, slideIdOrderPairs.filter(s => s.id));
-      console.log('[PresentationEditor] Slide order updated:', slideIdOrderPairs);
-    } catch (err) {
-      console.error('[PresentationEditor] Error updating slide order:', err);
-    }
-  };
+
 
   // Add slide below selected
   const handleAddSlide = async (type) => {
@@ -154,18 +127,7 @@ const PresentationEditor = () => {
     setTimeout(() => saveSlide({ ...slides[selectedSlide], [field]: value }, selectedSlide), 0);
   };
 
-  // MCQ: toggle bold for correct answer
-  const toggleMCQCorrect = (optionIdx) => {
-    setSlides(prev => prev.map((slide, idx) => {
-      if (idx !== selectedSlide) return slide;
-      const correct = slide.correct || [];
-      const isCorrect = correct.includes(optionIdx);
-      return {
-        ...slide,
-        correct: isCorrect ? correct.filter(i => i !== optionIdx) : [...correct, optionIdx]
-      };
-    }));
-  };
+
 
   // For ReactQuill, limit content to 10 lines (approximate by counting <p> tags)
   const MAX_CONTENT_LINES = 12; // adjust for font size and slide height
@@ -186,10 +148,20 @@ const PresentationEditor = () => {
       console.log(`[PresentationEditor] Auto-saving slide ${selectedSlide} before switching to slide ${idx}`);
       saveSlide(slides[selectedSlide], selectedSlide);
       setSelectedSlide(idx);
-      setLastSelectedSlide(idx);
       console.log(`[PresentationEditor] Switched to slide ${idx}`);
     }
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-primary-50 to-secondary-50 flex items-center justify-center">
+        <div className="text-center">
+          <Loader className="h-8 w-8 animate-spin mx-auto mb-4" />
+          <p>Loading presentation...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary-50 to-secondary-50 py-8">
@@ -219,12 +191,12 @@ const PresentationEditor = () => {
                   </div>
                   <div className="px-4 py-2 text-sm bg-white" style={{ height: SLIDE_HEIGHT / 2 - 28, overflow: 'hidden', fontSize: 14, zIndex: 0 }}
                     dangerouslySetInnerHTML={{ __html: slide.content || '<span class="text-gray-400">(No Content)</span>' }} />
-                  </div>
                 </div>
               </div>
             ))}
           </div>
         </div>
+        
         {/* Main Editor (right) */}
         <div className="flex-1 flex flex-col items-center">
           {/* Toolbar above slide */}
@@ -246,27 +218,29 @@ const PresentationEditor = () => {
                 ))}
               </select>
             </div>
-            <div className="mb-4 flex gap-2 w-full max-w-2xl">
-              {SLIDE_TEMPLATES.map(t => (
-                <button
-                  key={t.type}
-                  className={`btn-secondary ${template === t.type ? 'bg-primary-100 text-primary-700' : ''}`}
-                  onClick={() => setTemplate(t.type)}
-                >
-                  {t.label}
-                </button>
-              ))}
-              <button className="btn-secondary" onClick={() => setSlides(prev => prev.map((s, i) => i === selectedSlide ? { ...s, ...SLIDE_TEMPLATES.find(t => t.type === template).content, type: template } : s))}>Clear</button>
-              <button className="btn-primary ml-2" onClick={async () => {
-                console.log('[PresentationEditor] Saving all slides...');
-                for (let i = 0; i < slides.length; i++) {
-                  await saveSlide(slides[i], i);
-                  console.log(`[PresentationEditor] Saved slide ${i}`);
-                }
-                console.log('[PresentationEditor] All slides saved.');
-              }}>Save Presentation</button>
-            </div>
           </div>
+          
+          <div className="mb-4 flex gap-2 w-full max-w-2xl">
+            {SLIDE_TEMPLATES.map(t => (
+              <button
+                key={t.type}
+                className={`btn-secondary ${template === t.type ? 'bg-primary-100 text-primary-700' : ''}`}
+                onClick={() => setTemplate(t.type)}
+              >
+                {t.label}
+              </button>
+            ))}
+            <button className="btn-secondary" onClick={() => setSlides(prev => prev.map((s, i) => i === selectedSlide ? { ...s, ...SLIDE_TEMPLATES.find(t => t.type === template).content, type: template } : s))}>Clear</button>
+            <button className="btn-primary ml-2" onClick={async () => {
+              console.log('[PresentationEditor] Saving all slides...');
+              for (let i = 0; i < slides.length; i++) {
+                await saveSlide(slides[i], i);
+                console.log(`[PresentationEditor] Saved slide ${i}`);
+              }
+              console.log('[PresentationEditor] All slides saved.');
+            }}>Save Presentation</button>
+          </div>
+          
           {/* Slide Editor Container */}
           <div
             className="bg-white border shadow-lg flex flex-col"
@@ -301,6 +275,4 @@ const PresentationEditor = () => {
   );
 };
 
-// DISABLED: This page is currently disabled due to unresolved JSX errors.
-// export default PresentationEditor;
-// (Comment out the main return and export) 
+export default PresentationEditor; 

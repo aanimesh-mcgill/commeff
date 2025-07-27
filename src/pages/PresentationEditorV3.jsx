@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { doc, getDoc, updateDoc, setDoc, collection, getDocs, query, orderBy, onSnapshot, addDoc, serverTimestamp, collectionGroup, where } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, collection, getDocs, query, orderBy, onSnapshot, collectionGroup, where } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { PresentationToolbar } from './PresentationToolbar';
 import { SlidesSidebar } from './SlidesSidebar';
@@ -7,7 +7,7 @@ import { SlideCanvas } from './SlideCanvas';
 import { ToastContainer } from '../components/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import PresentationService from '../services/PresentationService';
-import { ThumbsUp, MessageSquare } from 'lucide-react';
+
 import PresentationFullScreen from './PresentationFullScreen';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 

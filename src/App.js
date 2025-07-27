@@ -13,6 +13,9 @@ import CourseHome from './pages/CourseHome';
 import PresentationBuilder from './pages/PresentationBuilder.jsx';
 import PresentationEditorV3 from './pages/PresentationEditorV3.jsx';
 import LivePresentationViewer from './pages/LivePresentationViewer';
+import InstructorDashboard from './components/dashboard/InstructorDashboard';
+import ErrorBoundary from './components/common/ErrorBoundary';
+import LoadingSpinner from './components/common/LoadingSpinner';
 import './index.css';
 import './components/presentations/PresentationStyles.css';
 import PresentationService from './services/PresentationService';
@@ -110,6 +113,14 @@ const AppContent = () => {
               } 
             />
             <Route 
+              path="/dashboard" 
+              element={
+                <ProtectedRoute requireInstructor>
+                  <InstructorDashboard />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
               path="/course/:courseId" 
               element={
                 <ProtectedRoute>
@@ -153,35 +164,37 @@ const AppContent = () => {
 // Main App Component
 const App = () => {
   return (
-    <AuthProvider>
-      <Router>
-      <AppContent />
-      </Router>
-      <Toaster
-        position="top-right"
-        toastOptions={{
-          duration: 4000,
-          style: {
-            background: '#363636',
-            color: '#fff',
-          },
-          success: {
-            duration: 3000,
-            iconTheme: {
-              primary: '#10B981',
-              secondary: '#fff',
+    <ErrorBoundary>
+      <AuthProvider>
+        <Router>
+          <AppContent />
+        </Router>
+        <Toaster
+          position="top-right"
+          toastOptions={{
+            duration: 4000,
+            style: {
+              background: '#363636',
+              color: '#fff',
             },
-          },
-          error: {
-            duration: 5000,
-            iconTheme: {
-              primary: '#EF4444',
-              secondary: '#fff',
+            success: {
+              duration: 3000,
+              iconTheme: {
+                primary: '#10B981',
+                secondary: '#fff',
+              },
             },
-          },
-        }}
-      />
-    </AuthProvider>
+            error: {
+              duration: 5000,
+              iconTheme: {
+                primary: '#EF4444',
+                secondary: '#fff',
+              },
+            },
+          }}
+        />
+      </AuthProvider>
+    </ErrorBoundary>
   );
 };
 

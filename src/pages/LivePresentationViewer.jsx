@@ -36,9 +36,10 @@ const LivePresentationViewer = () => {
   const [commentsLoaded, setCommentsLoaded] = useState(false);
   const [groupsLoaded, setGroupsLoaded] = useState(false);
   const [firestoreInitialized, setFirestoreInitialized] = useState(false);
+  const [currentSlideIndexState, setCurrentSlideIndexState] = useState(0);
 
   // Version tracking
-  const VERSION = "V1.7.0";
+  const VERSION = "V1.7.1";
   
   // Track groups being deleted to prevent re-adding from Firestore
   const groupsBeingDeleted = new Set();
@@ -386,6 +387,7 @@ const LivePresentationViewer = () => {
         window.currentSlideIndex = presentationWithDefaults.currentSlideIndex;
         window.courseId = courseId;
         window.presentationId = presentationSnap.id;
+        setCurrentSlideIndexState(presentationWithDefaults.currentSlideIndex);
         console.log('[LiveViewer] Set global variables (from fetchLive):', {
           currentSlideIndex: window.currentSlideIndex,
           courseId: window.courseId,
@@ -442,6 +444,7 @@ const LivePresentationViewer = () => {
         window.currentSlideIndex = presentationData.currentSlideIndex;
         window.courseId = courseId;
         window.presentationId = doc.id;
+        setCurrentSlideIndexState(presentationData.currentSlideIndex);
         console.log('[LiveViewer] Set global variables:', {
           currentSlideIndex: window.currentSlideIndex,
           courseId: window.courseId,
@@ -462,14 +465,28 @@ const LivePresentationViewer = () => {
 
   // Set up Firestore listeners for comments, groups, and likes
   useEffect(() => {
-    if (!presentationId || !courseId || !firestoreInitialized) {
+    if (!presentationId || !courseId || !firestoreInitialized || window.currentSlideIndex === undefined) {
       console.log('[LiveViewer] Firestore listeners not ready:', { 
         presentationId, 
         courseId, 
-        firestoreInitialized 
+        firestoreInitialized,
+        currentSlideIndex: window.currentSlideIndex
       });
       return;
     }
+    
+    console.log('[LiveViewer] 🔄 SLIDE CHANGED - Reinitializing Firestore listeners for slide:', window.currentSlideIndex);
+    
+    // Clear existing comments and groups when slide changes
+    console.log('[LiveViewer] Clearing existing comments and groups for slide change');
+    window.commentsMap = {};
+    window.userLikes.clear();
+    
+    // Clear UI
+    const commentList = document.getElementById('commentList');
+    const groupingArea = document.getElementById('groupingArea');
+    if (commentList) commentList.innerHTML = '';
+    if (groupingArea) groupingArea.innerHTML = '';
     
     console.log('[LiveViewer] Setting up Firestore listeners for comments, groups, and likes');
     console.log('[LiveViewer] Paths:', {
@@ -628,7 +645,7 @@ const LivePresentationViewer = () => {
       groupsUnsubscribe();
       likesUnsubscribe();
     };
-  }, [presentationId, courseId, firestoreInitialized, getCommentsCollection, getGroupsCollection, getLikesCollection]);
+  }, [presentationId, courseId, firestoreInitialized, currentSlideIndexState, getCommentsCollection, getGroupsCollection, getLikesCollection]);
 
   // Set up username for anonymous mode
   useEffect(() => {

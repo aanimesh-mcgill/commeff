@@ -35,7 +35,7 @@ const LivePresentationViewer = () => {
   const [firestoreInitialized, setFirestoreInitialized] = useState(false);
 
   // Version tracking
-  const VERSION = "V1.4.15";
+  const VERSION = "V1.7.1";
 
   // DEBUG LOGGING for Firestore rule troubleshooting
   useEffect(() => {
